@@ -1,0 +1,154 @@
+---
+title: 'Breast MRI datasets descriptive stats:'
+author: "Cristina Gallego"
+date: "March 14, 2016"
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+    theme: cerulean
+---
+
+Read in patient information from biomatrix and collects statistics of datasets used in study:
+- Patient info:
+  * #, Age,
+  
+
+```{r fig.width=12, fig.height=12, warning=FALSE, message=FALSE}
+options(width = 500)
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue")
+library(R.utils)
+library("RSQLite")
+sqlite <- dbDriver("SQLite")
+conn <- dbConnect(sqlite, "textureUpdatedFeatures.db")
+
+# 2) all T1W features
+lesionsQuery <- dbGetQuery(conn, "SELECT *
+                           FROM  lesion 
+                           INNER JOIN f_dynamic ON (lesion.lesion_id = f_dynamic.lesion_id)
+                           INNER JOIN f_morphology ON (lesion.lesion_id = f_morphology.lesion_id)
+                           INNER JOIN f_texture ON (lesion.lesion_id = f_texture.lesion_id)
+                           INNER JOIN stage1features ON (lesion.lesion_id = stage1features.lesion_id)
+                           INNER JOIN f_T2 ON (lesion.lesion_id = f_T2.lesion_id)
+                           INNER JOIN radiologyInfo ON (lesion.lesion_id = radiologyInfo.lesion_id)")
+
+# prune entries and extract feature subsets
+# corresponds to 5 entries lesion info, 34 dynamic, 19 morpho, 34 texture fueatures
+lesioninfo = lesionsQuery[c(1:26)]
+dynfeatures = lesionsQuery[c(29:62)]
+morphofeatures = lesionsQuery[c(65:83)]
+texfeatures = lesionsQuery[c(86:129)]
+T2info = lesionsQuery[c(259:270)]
+T2features = lesionsQuery[c(259,267:291,232:251)]
+stage1features = lesionsQuery[c(132:231)]
+imagingdetails = lesionsQuery[c(293:318)]
+
+##### set data splits
+# combine all features and exclude foci lesions at this point
+namest1w = names(cbind(dynfeatures, morphofeatures, texfeatures, stage1features))
+namest2w = names(T2features)
+
+# all lesions at the lesion id
+allfeatures = cbind(lesioninfo[c("lesion_label")], dynfeatures, morphofeatures, texfeatures, stage1features, T2features)   
+# select non foci
+lesioninfo = subset(lesioninfo, lesion_label != "fociB" & lesion_label != "fociM" )
+
+allfeatures = allfeatures[rownames(lesioninfo),]
+allfeatures$origlesion_label = factor(allfeatures$lesion_label)
+print(summary(allfeatures$origlesion_label))
+
+
+########## Patient 
+patientage = data.frame()
+for (k in 1:length(lesioninfo$lesion_id)) {
+    # find the age of patient at the time of imaging
+    days = difftime(lesioninfo$exam_dt_datetime[k], lesioninfo$anony_dob_datetime[k], 
+        units = "days")
+    age = days[[1]]/365
+    patientage = rbind(patientage, c(age))
+}
+
+# combine with other data
+patientinfo = cbind(lesioninfo$cad_pt_no_txt, patientage, lesioninfo$lesion_label, lesioninfo$BIRADS)
+colnames(patientinfo) <- c("CADid", "age", "type", "BIRADS")
+
+# print summary statistics
+print(summary(patientinfo))
+
+# print All cad ids
+print(unique(patientinfo$CADid))
+print(length(unique(patientinfo$CADid)))
+
+# print Age stats
+print(summary(patientinfo$age))
+print(sd(patientinfo$age))
+range(patientinfo$age)
+
+
+# Range of imaging studies
+range(lesioninfo$exam_dt_datetime)
+
+# time between imaging and procedure for biopsies only
+print(summary(factor(lesioninfo$proc_proc_source_int)))
+print(summary(factor(lesioninfo$proc_proc_tp_int)))
+
+biopsies = subset(lesioninfo, proc_proc_source_int!="Surgical/Operating Rm (includes 'Sentinel Lymph Node Biopsy')")
+print(summary(factor(biopsies$proc_proc_tp_int)))
+
+# for biopsies
+procinfo = c()
+for (k in 1:length(biopsies$proc_pt_procedure_id)) {
+    # find the age of patient at the time of imaging
+    days = difftime(biopsies$proc_proc_dt_datetime[k], biopsies$exam_dt_datetime[k], 
+        units = "days")
+    print(days[[1]])
+    procinfo = c(procinfo, days[[1]])
+}
+
+# time after imgaing stats
+summary(procinfo)
+
+
+# plot By default, geom_bar uses stat='bin'. This makes the height of each
+# bar equal to the number of cases in each group, and it is incompatible
+# with mapping values to the y aesthetic.
+require(ggplot2)
+IQR = c(summary(patientinfo$age)[[2]], summary(patientinfo$age)[[5]])
+histages <- ggplot(patientinfo, aes(age))
+histages + geom_bar(width=1.5) + 
+  geom_vline(xintercept = range(patientinfo$age), linetype = "dotted") + 
+  geom_vline(xintercept = mean(patientinfo$age), linetype = "longdash", colour = "red") + 
+  geom_vline(xintercept = median(patientinfo$age), linetype = "longdash", colour = "blue") + 
+  geom_vline(xintercept = IQR, linetype = "longdash", colour = "green") + 
+  labs(x = "age in years", y = "# patients",  title = "Patients age at the time of imaging")
+
+
+bartypes <- ggplot(patientinfo, aes(type, fill = BIRADS))
+bartypes + geom_bar() + labs(x = "type of lesion", y = "# patients", title = "Type of lesion and BIRADS category")
+
+
+library(reshape)
+# subset by pathology
+patho = summary(as.factor(lesioninfo$lesion_diagnosis))
+for (k in 1:length(patho)) {
+    print(names(patho[k]))
+    print(cast(lesioninfo, ~lesion_label, subset = lesion_diagnosis == 
+        names(patho[k]), value = "lesion_id", length))
+}
+
+benigns = c(79, 28, 17, 7, 19, 3, 20, 6, 73, 21, 72, 21, 19, 2, 18) # n=405
+maligns = c(79, 3, 151, 21, 1, 2, 1)
+print(sum(benigns))
+print(sum(maligns))
+
+
+# percentages
+print(sum(benigns))/print(sum(benigns)+sum(maligns))
+print(sum(maligns))/print(sum(benigns)+sum(maligns))
+
+print(benigns/sum(benigns)*100)
+print(maligns/sum(maligns)*100)
+
+```
+
+

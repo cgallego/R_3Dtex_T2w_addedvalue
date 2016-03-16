@@ -1,0 +1,343 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+
+T2 features 
+========================================================
+
+- This code analysis T2w feature relevance, in addition to T1w and T1+T2w 
+- finds relevant features via regularized RF
+- Plot z-scores via boruta
+
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width=95)
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue")
+source('C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/functions.R')
+
+library("RSQLite")
+library(MASS)
+library(caret)
+require(data.table)
+require(ggplot2)
+library(pROC)
+library(RRF)
+
+# 1) From 100% dataset, Create train/validation (80%) / heldout (20%) partitions
+sqlite <- dbDriver("SQLite")
+conn <- dbConnect(sqlite, "textureUpdatedFeatures.db")
+
+# 2) all T1w features
+lesionsQuery <- dbGetQuery(conn, "SELECT *
+         FROM  stage1features
+           INNER JOIN lesion ON (stage1features.lesion_id = lesion.lesion_id)
+           INNER JOIN f_T2 ON (stage1features.lesion_id = f_T2.lesion_id)")
+ 
+# For bootstrap resampling, createResample is used
+# Randomization is done at the patient level, so that bootstrapping preserves lesion independence
+lesionsQuery = subset(lesionsQuery, lesion_label != "fociB" & lesion_label != "fociM" ) # exclude foci at this point
+id_cad_pts = lesionsQuery$cad_pt_no_txt
+uniq_cad = unique(lesionsQuery$cad_pt_no_txt)
+npatients = 1:length(uniq_cad)
+  
+# when y is a factor in an attempt to balance the class distributions within the splits.
+# The names of the list objects will denote the fold membership using the pattern 
+# resamples." meaning the ith section (of k) of the jth cross-validation set (of times).
+set.seed(1234)
+npatients = length(uniq_cad)
+allpartitionsetD <- createFolds(y = 1:length(uniq_cad),## the outcome data are needed
+                                k = npatients, 
+                                list = TRUE)  
+
+save(lesionsQuery, id_cad_pts, uniq_cad, allpartitionsetD, 
+     file="C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/allpartitionsetD")
+
+
+
+```     
+
+
+```{r fig.width=12}
+# read datasets
+T1wf = read_T1uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+T2wf = read_T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+T1T2wf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+    
+## formant
+T1wfeatures = rbind(T1wf[[1]], T1wf[[2]])
+T1wlesioninfo = rbind(T1wf[[5]], T1wf[[6]])
+
+T2wfeatures = rbind(T2wf[[1]], T2wf[[2]])
+T2wlesioninfo = rbind(T2wf[[5]], T2wf[[6]])
+
+T1T2wfeatures = rbind(T1T2wf[[1]], T1T2wf[[2]])
+T1T2wlesioninfo = rbind(T1T2wf[[5]], T1T2wf[[6]])
+
+
+### print number of total lesions 
+# before was ##   C / NC = 140 / 132
+print(summary(as.factor(T1wfeatures$orig_label)))
+
+# print number T1w features
+print(colnames(T1wfeatures))
+# print number T2w features
+print(colnames(T2wfeatures))
+# print number T1+T2w features
+print(colnames(T1T2wfeatures))
+
+
+################ 
+## Subset feature selection via rff
+################ 
+subfeatsel_T1w = subset_feature_selection(T1wfeatures[,-c(ncol(T1wfeatures))]) # exlude orig_label
+subfeatsel_T2w = subset_feature_selection(T2wfeatures[,-c(ncol(T2wfeatures))]) # exlude orig_label
+subfeatsel_T1T2w = subset_feature_selection(T1T2wfeatures[,-c(ncol(T1T2wfeatures))]) # exlude orig_label
+
+# append
+allrfsfeatures = data.frame()
+# only t1
+df = subfeatsel_T1w$selvarImp
+df$SelectedFeatureGroup = "T1wf"
+allrfsfeatures = rbind(allrfsfeatures, df)
+# only t2
+df = subfeatsel_T2w$selvarImp
+df$SelectedFeatureGroup = "T2wf"
+allrfsfeatures = rbind(allrfsfeatures, df)
+# t1 + t2
+df = subfeatsel_T1T2w$selvarImp
+df$SelectedFeatureGroup = "T1T2wf"
+allrfsfeatures = rbind(allrfsfeatures, df)
+
+library("lattice")
+library("latticeExtra")
+require(ggplot2)
+
+# plot
+g <- ggplot(allrfsfeatures, aes(x = factor(selfeat), weight=Overall, fill=SelectedFeatureGroup))
+g + geom_bar() + coord_flip() + theme_bw(base_size = 16) + labs(title = "Selected features with RFS B vs. M lesions", 
+    x = "", y = "variable importance ranking")
+
+```
+
+
+Random Forest via permutation tests feature relevance (Boruta)
+=====
+```{r fig.width=10, fig.height=12}
+library("Boruta")
+require(data.table)
+# Color codes: c('green', 'yellow', 'red', 'blue'), Confirmed, Tentative,
+# Rejected and shadow.  Blue boxplots correspond to minimal, average and
+# maximum Z score of a shadow attribute. Red Boruta mass: (to run boruta
+# uncomment)
+set.seed(1)
+T1wBoruta <- Boruta(lesion_label ~ ., data = na.omit(T1wfeatures[,-ncol(T1wfeatures)]), 
+                    doTrace = 2, ntree = 500)
+print(T1wBoruta)
+plot(T1wBoruta)
+
+# T2wBoruta:
+set.seed(2)
+T2wBoruta <- Boruta(lesion_label ~ ., data = na.omit(T2wfeatures[,-ncol(T2wfeatures)]), 
+                      doTrace = 2, ntree = 500)
+print(T2wBoruta)
+plot(T2wBoruta)
+
+# T1T2wBoruta:
+set.seed(12)
+T1T2wBoruta <- Boruta(lesion_label ~ ., data = na.omit(T1T2wfeatures[,-ncol(T1T2wfeatures)]), 
+                      doTrace = 2, ntree = 500)
+print(T1T2wBoruta)
+plot(T1T2wBoruta)
+
+## Process results and plot Z-scores
+library("caret")
+confirmedT1w <- T1wBoruta$finalDecision[T1wBoruta$finalDecision == "Confirmed"]
+tentativeT1w <- T1wBoruta$finalDecision[T1wBoruta$finalDecision == "Tentative"]
+selborutaT1w = c(confirmedT1w, tentativeT1w)
+print(paste("Selected T1wBoruta features: ",names(selborutaT1w)))
+rankingsT1w <- T1wBoruta$ImpHistory
+
+confirmedT2w <- T2wBoruta$finalDecision[T2wBoruta$finalDecision == "Confirmed"]
+tentativeT2w <- T2wBoruta$finalDecision[T2wBoruta$finalDecision == "Tentative"]
+selborutaT2w = c(confirmedT2w, tentativeT2w)
+print(paste("Selected T2wBoruta features: ",names(selborutaT2w)))
+rankingsT2w <- T2wBoruta$ImpHistory
+
+confirmedT1T2w <- T1T2wBoruta$finalDecision[T1T2wBoruta$finalDecision == "Confirmed"]
+tentativeT1T2w <- T1T2wBoruta$finalDecision[T1T2wBoruta$finalDecision == "Tentative"]
+selborutaT1T2w = c(confirmedT1T2w, tentativeT1T2w)
+print(paste("Selected T1T2wBoruta features: ",names(selborutaT1T2w)))
+rankingsT1T2w <- T1T2wBoruta$ImpHistory
+
+# get mean z-scores across runs
+# only T1w
+zscores = rankingsT1w[, names(selborutaT1w)]
+df = data.frame(zscores=apply(zscores, 2, mean))
+df$selfeatures = rownames(df)
+df$SelectedFeatureGroup = "T1wf"
+# append
+allBorutafeatures = data.frame()
+# only t1
+allBorutafeatures = rbind(allBorutafeatures, df)
+
+# only T2w
+zscores = rankingsT2w[, names(selborutaT2w)]
+df = data.frame(zscores=apply(zscores, 2, mean))
+df$selfeatures = rownames(df)
+df$SelectedFeatureGroup = "T2wf"
+# append only T2w
+allBorutafeatures = rbind(allBorutafeatures, df)
+
+# only T1T2w
+zscores = rankingsT1T2w[, names(selborutaT1T2w)]
+df = data.frame(zscores=apply(zscores, 2, mean))
+df$selfeatures = rownames(df)
+df$SelectedFeatureGroup = "T1T2wf"
+# append only T2w
+allBorutafeatures = rbind(allBorutafeatures, df)
+
+library("lattice")
+library("latticeExtra")
+require(ggplot2)
+
+# plot
+g <- ggplot(allBorutafeatures, aes(x = factor(selfeatures), weight=zscores, fill=SelectedFeatureGroup))
+g + geom_bar() + coord_flip() + theme_bw(base_size = 16) + labs(title = "Selected features with Boruta B vs. M lesions", 
+    x = "", y = "z-score")
+
+
+```
+
+
+Now correlate with BIRADS T2w descriptors (when available)
+====
+```{r fig.width=10, fig.height=12}
+BIRADS_T2features <- na.omit(T2wfeatures)
+BIRADS_T1T2features <- na.omit(T1T2wfeatures)
+BIRADS_T2features$find_t2_signal_int <- as.factor(BIRADS_T2features$find_t2_signal_int)
+print(summary(BIRADS_T2features$find_t2_signal_int))
+BIRADS_T1T2features$find_t2_signal_int <- as.factor(BIRADS_T1T2features$find_t2_signal_int)
+
+# select only confirmed
+BIRADS_T2features = BIRADS_T2features[,c("find_t2_signal_int",names(confirmedT2w))]
+BIRADS_T1T2features = BIRADS_T1T2features[,c("find_t2_signal_int",names(confirmedT1T2w))]
+
+library(lattice)
+super.sym <- trellis.par.get("superpose.symbol")
+print("For T2w only:")
+#plot
+splom(~BIRADS_T2features, groups = find_t2_signal_int, 
+    data = BIRADS_T2features, key = list(title = "only T2w relevant features by BIRADS descriptors", 
+        columns = 3, points = list(pch = super.sym$pch[c(1:4)], bg = super.sym$col[c(1:4)], 
+            col = super.sym$col[c(1:4)], fill = super.sym$col[c(1:4)]), text = list(c("Hyperintense", 
+            "Hypointense or not seen", "Isointense or None", "Slightly hyperintense"))))
+####
+splom(~BIRADS_T1T2features, groups = find_t2_signal_int, 
+      data = BIRADS_T1T2features, key = list(title = "T1+T2 relevant features by BIRADS descriptors", 
+        columns = 3, points = list(pch = super.sym$pch[c(1:4)], bg = super.sym$col[c(1:4)], 
+            col = super.sym$col[c(1:4)], fill = super.sym$col[c(1:4)]), text = list(c("Hyperintense", 
+            "Hypointense or not seen", "Isointense or None", "Slightly hyperintense"))))
+
+```
+
+Now feature selection via Regularized Random Forest (RRF) - correct for high ly correlated features
+======
+```{r fig.width=10, fig.height=12}
+library(RRF)
+### for T1
+T1wXfs = na.omit(T1wfeatures[,-ncol(T1wfeatures)])
+T1wYs = T1wXfs$lesion_label
+T1wXfs = T1wXfs[,-1]
+
+set.seed(1)
+bestmtry = tuneRRF(T1wXfs, T1wYs, mtryStart = 1, ntreeTry=1000, doBest=FALSE, plot=FALSE)
+mtryind = which.min(as.data.frame(bestmtry)$OOBError)
+T1wfs_rrf = RRF(T1wXfs, T1wYs, mtry=bestmtry[mtryind], flagReg = 1, 
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+print(T1wfs_rrf)
+
+# overall feature importance
+T1wvarImp_rrf = data.frame(varImpPlot(T1wfs_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+T1wvarImp <- T1wvarImp_rrf[ order(-T1wvarImp_rrf[,1]), ] 
+# pick only non-zero variables
+T1wvarImp = unique(T1wvarImp)
+df = data.frame(selfeat=rownames(T1wvarImp))
+df$MeanDecreaseAccuracy = T1wvarImp$MeanDecreaseAccuracy 
+df$SelectedFeatureGroup = "T1wf"
+# append
+allRRFfeatures = data.frame()
+# only t1
+allRRFfeatures = rbind(allRRFfeatures, df)
+
+
+### for T2
+T2wXfs = na.omit(T2wfeatures[,-ncol(T2wfeatures)])
+T2wYs = T2wXfs$lesion_label
+T2wXfs$find_t2_signal_int = as.factor(T2wXfs$find_t2_signal_int)
+T2wXfs = T2wXfs[,-1]
+
+set.seed(2)
+T2wfs_rrf = RRF(T2wXfs, T2wYs, mtry=1, flagReg = 1, 
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+print(T2wfs_rrf)
+
+# overall feature importance
+T2wvarImp_rrf = data.frame(varImpPlot(T2wfs_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+T2wvarImp <- T2wvarImp_rrf[ order(-T2wvarImp_rrf[,1]), ] 
+# pick only non-zero variables
+T2wvarImp = unique(T2wvarImp)
+df = data.frame(selfeat=rownames(T2wvarImp))
+df$MeanDecreaseAccuracy = T2wvarImp$MeanDecreaseAccuracy 
+df$SelectedFeatureGroup = "T2wf"
+# append
+# only t2
+allRRFfeatures = rbind(allRRFfeatures, df)
+
+### for T1+T2
+T1T2wXfs = na.omit(T1T2wfeatures[,-ncol(T1T2wfeatures)])
+T1T2wYs = T1T2wXfs$lesion_label
+T1T2wXfs$find_t2_signal_int = as.factor(T1T2wXfs$find_t2_signal_int)
+T1T2wXfs = T1T2wXfs[,-1]
+
+set.seed(2)
+T1T2wfs_rrf = RRF(T1T2wXfs, T1T2wYs, mtry=1, flagReg = 1, 
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+print(T1T2wfs_rrf)
+
+# overall feature importance
+T1T2wvarImp_rrf = data.frame(varImpPlot(T1T2wfs_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+T1T2wvarImp <- T1T2wvarImp_rrf[ order(-T1T2wvarImp_rrf[,1]), ] 
+# pick only non-zero variables
+T1T2wvarImp = unique(T1T2wvarImp)
+df = data.frame(selfeat=rownames(T1T2wvarImp))
+df$MeanDecreaseAccuracy = T1T2wvarImp$MeanDecreaseAccuracy 
+df$SelectedFeatureGroup = "T1T2wf"
+# append
+# only t2
+allRRFfeatures = rbind(allRRFfeatures, df)
+
+
+library("lattice")
+library("latticeExtra")
+require(ggplot2)
+
+# plot
+g <- ggplot(allRRFfeatures, aes(x = factor(selfeat), weight=MeanDecreaseAccuracy, fill=SelectedFeatureGroup))
+g + geom_bar() + coord_flip() + theme_bw(base_size = 16) + labs(title = "Selected features with RRF B vs. M lesions", 
+    x = "", y = "MeanDecreaseAccuracy")
+
+
+```
+
+

@@ -1,0 +1,390 @@
+---
+title: "lop-batch1"
+author: "Cristina Gallego"
+date: "March 14, 2016"
+output: html_document
+---
+
+```{r setup1}
+knitr::opts_chunk$set(cache=TRUE, cache.path = "batch1_cache/", fig.path="batch1_figure/")
+
+loppath = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue"
+setwd(loppath)
+source("functions.R")
+
+```
+
+
+```{r lop-batch1, fig.width=12, fig.height=12, warning=FALSE}
+
+# perform leave-one-patient-out LMSIR prediction
+for(k in 1:75){  # 1:npatients
+  ## Create folds leave-one-patient-out
+  allfT2 = read_T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, k)
+  allfT1 = read_T1uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, k)
+  allfT1T2 = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, k)
+    
+  ## formant
+  T2train = allfT2[[1]];   T2traininfo = allfT2[[5]];   T2trainids = T2traininfo$lesion_id;
+  T2test = allfT2[[2]]; T2testinfo = allfT2[[6]];  T2testids = T2testinfo$lesion_id;
+  T1train = allfT1[[1]]; T1traininfo = allfT1[[5]]; T1trainids = T1traininfo$lesion_id;
+  T1test = allfT1[[2]]; T1testinfo = allfT1[[6]];  T1testids = T1testinfo$lesion_id;
+  T1T2train = allfT1T2[[1]]; T1T2traininfo = allfT1T2[[5]]; T1T2trainids = T1T2traininfo$lesion_id;
+  T1T2test = allfT1T2[[2]]; T1T2testinfo = allfT1T2[[6]];  T1T2testids = T1T2testinfo$lesion_id;
+  
+  # remove radiologist based BIRADS category and measured muscle-to-lesion SI 
+  # add predicted T2w features
+  T2LMSIR = getid_predLMSIR(LMSIR_lop, T2trainids)
+  T2wSI = getid_predT2wSI(perfT2wSI_lop, T2trainids)
+  
+  T2train = T2train[,-c(ncol(T2train))] # exlude orig_label
+  T2train$find_t2_signal_int = as.factor(T2train$find_t2_signal_int)
+  wpredT2train = cbind(T2train, LMSIR_predicted=T2LMSIR$LMSIR_predicted, T2wSI_predicted=T2wSI$T2wSI_predicted)
+  T1train = T1train[,-c(ncol(T1train))]
+  
+  # remove radiologist based BIRADS category and measured muscle-to-lesion SI 
+  # add predicted T2w features
+  T1T2LMSIR = getid_predLMSIR(LMSIR_lop, T1T2trainids)
+  T1T2wSI = getid_predT2wSI(perfT2wSI_lop, T1T2trainids)
+  
+  ########## consider differneces
+  T1T2train = T1T2train[,-c(ncol(T1T2train))]
+  T1T2train$find_t2_signal_int = as.factor(T1T2train$find_t2_signal_int)
+  ##
+  wpredT1T2train = cbind(T1T2train, LMSIR_predicted=T1T2LMSIR$LMSIR_predicted, T2wSI_predicted=T1T2wSI$T2wSI_predicted)
+  wpredT1T2train$T2wSI_predicted = as.factor(wpredT1T2train$T2wSI_predicted)
+  
+  # with datasets:   T2train, wpredT2train, T1train, T1T2train, wpredT1T2train
+  selrrfimgT2 = RRF_featsel(T2train, "imgT2")
+  selrrfallT2 = RRF_featsel(wpredT2train, "allT2")
+  selrrfimgT1 = RRF_featsel(T1train, "imgT1")
+  selrrfall = RRF_featsel(wpredT1T2train, "all")
+  
+  ## group with all of the features spaces combined, most contributing T2w feature
+  imgT2featsel =  rbind(imgT2featsel, cbind(selrrfimgT2, lop=k) )
+  allT2featsel =  rbind(allT2featsel, cbind(selrrfallT2, lop=k) ) 
+  imgT1featsel =  rbind(imgT1featsel, cbind(selrrfimgT1, lop=k) ) 
+  allfeatsel = rbind(allfeatsel, cbind(selrrfall, lop=k) ) 
+
+  ##################
+  # Define datasets
+  ##################
+  # define datasets: imgT2wfeatures allT2wfeatures, imgT1wfeatures, allfeatures
+  imgT2features = T2train[,c("lesion_label", selrrfimgT2$selfeat)]
+  allT2features = wpredT2train[,c("lesion_label",selrrfallT2$selfeat)]
+  imgT1features = T1train[,c("lesion_label",selrrfimgT1$selfeat)]
+  allfeatures = wpredT1T2train[, c("lesion_label",selrrfall$selfeat)]
+  
+  ##################
+  # Build final classifiers
+  ##################
+  # data = imgT2features, 
+  # results:  bestune_imgT2
+  maxD = bestune_imgT2$maxD
+  ntrees = bestune_imgT2$ntrees
+  cat("bestune_imgT2 \t","max.depth ", maxD, "\t","#Trees ", ntrees, "\n")
+  
+  # train trees
+  treedata_imgT2 <- boosting(lesion_label ~ .,  data = imgT2features,  
+                       mfinal = ntrees, coeflearn = "Freund",
+                       control = rpart.control(maxdepth = maxD,  minsplit = 0, cp = 0.01))
+  # print accu
+  accuimgT2 = sum(treedata_imgT2$class == imgT2features$lesion_label)/ length(imgT2features$lesion_label)
+  print(accuimgT2)
+  lopaccu_imgT2 = c(lopaccu_imgT2, accuimgT2)  
+  
+  
+  ######## data = allT2features, 
+  # results:  bestune_allT2
+  maxD = bestune_allT2$maxD
+  ntrees = bestune_allT2$ntrees
+  cat("bestune_allT2 \t","max.depth ", maxD, "\t","#Trees ", ntrees, "\n")
+  
+  # train trees
+  treedata_allT2 <- boosting(lesion_label ~ .,  data = allT2features,  
+                       mfinal = ntrees, coeflearn = "Freund",
+                       control = rpart.control(maxdepth = maxD,  minsplit = 0, cp = 0.01))
+  # print accu
+  accuallT2 = sum(treedata_allT2$class == allT2features$lesion_label)/ length(allT2features$lesion_label)
+  print(accuallT2)
+  lopaccu_allT2 = c(lopaccu_allT2, accuallT2) 
+  
+  
+  #######  data = imgT1features, 
+  # results:  bestune_imgT1only
+  maxD = bestune_imgT1only$maxD
+  ntrees = bestune_imgT1only$ntrees
+  cat("bestune_imgT1 \t","max.depth ", maxD, "\t","#Trees ", ntrees, "\n")
+  
+  # train trees
+  treedata_imgT1 <- boosting(lesion_label ~ .,  data = imgT1features,  
+                       mfinal = ntrees, coeflearn = "Freund",
+                       control = rpart.control(maxdepth = maxD,  minsplit = 0, cp = 0.01))
+  # print accu
+  accuimgT1 = sum(treedata_imgT1$class == imgT1features$lesion_label)/ length(imgT1features$lesion_label)
+  print(accuimgT1)
+  lopaccu_imgT1 = c(lopaccu_imgT1, accuimgT1) 
+  
+  
+  ####### data = allfeatures, 
+  # results:  bestune_allonly
+  maxD = bestune_T1T2$maxD
+  ntrees = bestune_T1T2$ntrees
+  cat("bestune_all \t","max.depth ", maxD, "\t","#Trees ", ntrees, "\n")
+  
+  # train trees
+  treedata_all <- boosting(lesion_label ~ .,  data = allfeatures,  
+                       mfinal = ntrees, coeflearn = "Freund",
+                       control = rpart.control(maxdepth = maxD,  minsplit = 0, cp = 0.01))
+  # print accu
+  accuall = sum(treedata_all$class == allfeatures$lesion_label)/ length(allfeatures$lesion_label)
+  print(accuall)
+  lopaccu_all = c(lopaccu_all, accuall) 
+  
+  ##################
+  # Get Test info data
+  ##################
+  dfinfo = cbind(T2testinfo[,c(1,3,6,24:26)], 
+                 find_t2_signal_int=T2test$find_t2_signal_int)
+  print(dfinfo)
+  
+  ## apend LMSIR and T2wSI in case is used by classifier
+  testLMSIR = getid_predLMSIR(LMSIR_lop, T2testids)
+  testT2wSI = getid_predT2wSI(perfT2wSI_lop, T2testids)
+  
+  T2test = cbind(T2test, LMSIR_predicted=testLMSIR$LMSIR_predicted, T2wSI_predicted=testT2wSI$T2wSI_predicted)
+  
+  ##################
+  ### predict for each classifier
+  ##################
+  ## for T2
+  testpred = predict.boosting(treedata_imgT2, newdata = T2test) 
+  perf = data.frame(id=T2testinfo$lesion_id, C=testpred$prob[,1], NC=testpred$prob[,2],
+                    pred=testpred$class, obs=T2test$lesion_label)
+  print(perf)
+  perf_imgT2 = rbind(perf_imgT2, perf)
+  
+  testpred = predict.boosting(treedata_allT2, newdata = T2test) 
+  perf = data.frame(id=T2testinfo$lesion_id, C=testpred$prob[,1], NC=testpred$prob[,2],
+                    pred=testpred$class, obs=T2test$lesion_label)
+  print(perf)
+  perf_allT2 = rbind(perf_allT2, perf)
+  
+  ## for T1
+  testpred = predict.boosting(treedata_imgT1, newdata = T1test) 
+  perf = data.frame(id=T1testinfo$lesion_id, C=testpred$prob[,1], NC=testpred$prob[,2],
+                    pred=testpred$class, obs=T1test$lesion_label)
+  print(perf)
+  perf_imgT1 = rbind(perf_imgT1, perf)
+  
+  
+  ## for T1T2
+  ## apend LMSIR and T2wSI in case is used by classifier
+  testLMSIR = getid_predLMSIR(LMSIR_lop, T1T2testids)
+  testT2wSI = getid_predT2wSI(perfT2wSI_lop, T1T2testids)
+  
+  T1T2test = cbind(T1T2test, LMSIR_predicted=testLMSIR$LMSIR_predicted, T2wSI_predicted=testT2wSI$T2wSI_predicted)
+  
+  testpred = predict.boosting(treedata_all, newdata = T1T2test) 
+  perf = data.frame(id=T1T2testinfo$lesion_id, C=testpred$prob[,1], NC=testpred$prob[,2],
+                    pred=testpred$class, obs=T1T2test$lesion_label)
+  print(perf)
+  perf_all = rbind(perf_all, perf)
+ 
+  if(k %% 10 == 0){
+    # do cumulative states as functions of # of l-o=p
+    # Accuracy
+    accuperf_imgT2 = confusionMatrix(perf_imgT2$pred, perf_imgT2$obs)
+    print(accuperf_imgT2$overall)
+    accuperf_allT2 = confusionMatrix(perf_allT2$pred, perf_allT2$obs)
+    print(accuperf_allT2$overall)
+    accuperf_imgT1 = confusionMatrix(perf_imgT1$pred, perf_imgT1$obs)
+    print(accuperf_imgT1$overall)
+    accuperf_all = confusionMatrix(perf_all$pred, perf_all$obs)
+    print(accuperf_all$overall)
+    
+    # AUC
+    rocperf_imgT2 = roc(perf_imgT2$obs, perf_imgT2$C)
+    print(rocperf_imgT2)
+  
+    rocperf_allT2 = roc(perf_allT2$obs, perf_allT2$C)
+    print(rocperf_allT2)
+    
+    rocperf_imgT1 = roc(perf_imgT1$obs, perf_imgT1$C)
+    print(rocperf_imgT1)
+    
+    rocperf_all = roc(perf_all$obs, perf_all$C)
+    print(rocperf_all)
+    
+    # append
+    dfimgT2 = data.frame(npat=nrow(perf_imgT2), nNC=summary(perf_imgT2$obs)[[1]], nC=summary(perf_imgT2$obs)[[2]],
+                    lopAccuracy=accuperf_imgT2$overall[[1]], lopAUC=rocperf_imgT2$auc, type="imgT2")
+    lopcum_results = rbind(lopcum_results, dfimgT2)
+    # append
+    dfallT2 = data.frame(npat=nrow(perf_allT2), nNC=summary(perf_allT2$obs)[[1]], nC=summary(perf_allT2$obs)[[2]],
+                    lopAccuracy=accuperf_allT2$overall[[1]], lopAUC=rocperf_allT2$auc, type="allT2")
+    lopcum_results = rbind(lopcum_results, dfallT2)
+    # append
+    dfimgT1 = data.frame(npat=nrow(perf_imgT1), nNC=summary(perf_imgT1$obs)[[1]], nC=summary(perf_imgT1$obs)[[2]],
+                    lopAccuracy=accuperf_imgT1$overall[[1]], lopAUC=rocperf_imgT1$auc, type="imgT1")
+    lopcum_results = rbind(lopcum_results, dfimgT1)
+    # append
+    dfall = data.frame(npat=nrow(perf_all), nNC=summary(perf_all$obs)[[1]], nC=summary(perf_all$obs)[[2]],
+                    lopAccuracy=accuperf_all$overall[[1]], lopAUC=rocperf_all$auc, type="T1+T2")
+    lopcum_results = rbind(lopcum_results, dfall)
+    
+    # plot every 10 patients
+    ## plot ROCs each pass individually in l-o-p heldout test cases
+    par(mfrow=c(1,1))
+    n=15
+    colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+    # plot 1/4
+    p1 = calcAUC_plot(perf_imgT2$obs, perf_imgT2$C, 
+                               xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+    par(new=TRUE)
+    p2 = calcAUC_plot(perf_allT2$obs, perf_allT2$C, 
+                               xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+    par(new=TRUE)
+    p3 = calcAUC_plot(perf_imgT1$obs, perf_imgT1$C,
+                               xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+    par(new=TRUE)
+    p4 = calcAUC_plot(perf_all$obs, perf_all$C,
+                               xptext=0.75, yptext=0.45 ,colors[14], 
+                      atitle=paste0("ROCs leave-one-patient out test k= ",k))
+    
+    legend("bottomright", 
+           legend = c(paste0("imgT2w"),
+                      paste0("imgT2w+predT2w"),
+                      paste0("imgT1w"),
+                      paste0("imgT1+imgT2w+predT2w")),
+           col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+
+  }
+    
+  # save current state k patient out
+  save.image("Outputs/CADT2_addeddiagvalue_lop_batch1.RData")
+  
+}
+
+
+```
+
+
+plot batch1 results
+=================================
+```{r lop-batch1-plots, fig.width=12, fig.height=12, warning=FALSE}
+
+# plot
+require(ggplot2)
+lop_accuracies = data.frame(Accuracy=lopaccu_imgT2, type="imgT2w")
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_allT2, type="imgT2w+predT2w"))
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_imgT1, type="imgT1w"))
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_all, type="imgT1+imgT2w+predT2w"))
+
+p <- ggplot(lop_accuracies, aes(type, Accuracy, colour=type))
+p + geom_boxplot() + geom_jitter(width = 0.2)
+
+
+# plot features
+## group with all of the features spaces combined, most contributing T2w feature
+
+## imgT2featsel ###########
+# pick frequency of 75% or higher as very common feature
+dfimgT2 = data.frame(table(imgT2featsel$selfeat))
+dfimgT2$high = (dfimgT2$Freq>=0.75*max(imgT2featsel$lop))*1
+print(dfimgT2[dfimgT2$high==1, ])
+
+#qplot(factor(selfeat), data=imgT2featsel, geom="bar", fill=factor(high))
+ggplot(dfimgT2, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("imgT2featsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+## allT2featsel ########### 
+# pick frequency of 75% or higher as very common feature
+dfallT2 = data.frame(table(allT2featsel$selfeat))
+dfallT2$high = (dfallT2$Freq>=0.75*max(allT2featsel$lop))*1
+print(dfallT2[dfallT2$high==1, ])
+
+
+#qplot(factor(selfeat), data=allT2featsel, geom="bar", fill=factor(high))
+ggplot(dfallT2, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("allT2featsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+## imgT1featsel ########### 
+# pick frequency of 75% or higher as very common feature
+dfimgT1 = data.frame(table(imgT1featsel$selfeat))
+dfimgT1$high = (dfimgT1$Freq>=0.75*max(imgT1featsel$lop))*1
+print(dfimgT1[dfimgT1$high==1, ])
+
+
+#qplot(factor(selfeat), data=imgT1featsel, geom="bar", fill=factor(high))
+ggplot(dfimgT1, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("imgT1featsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+## allfeatsel ########### 
+# pick frequency of 75% or higher as very common feature
+dfall = data.frame(table(allfeatsel$selfeat))
+dfall$high = (dfall$Freq>=0.5*max(allfeatsel$lop))*1
+print(dfall[dfall$high==1, ])
+
+
+#qplot(factor(selfeat), data=allfeatsel, geom="bar", fill=factor(high))
+ggplot(dfall, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("allfeatsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+
+########### 
+## plot ROCs each pass individually in l-o-p heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(perf_imgT2$obs, perf_imgT2$C, 
+                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(perf_allT2$obs, perf_allT2$C, 
+                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(perf_imgT1$obs, perf_imgT1$C,
+                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+par(new=TRUE)
+p4 = calcAUC_plot(perf_all$obs, perf_all$C,
+                           xptext=0.75, yptext=0.45 ,colors[14], atitle="ROCs leave-one-patient out test ")
+
+legend("bottomright", 
+       legend = c(paste0("imgT2w"),
+                  paste0("imgT2w+predT2w"),
+                  paste0("imgT1w"),
+                  paste0("imgT1+imgT2w+predT2w")),
+       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+
+
+# find significants: only imgT2 vs. allT2
+roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
+# find significants: mass imgT1 vs all
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+# find significants: mass allT2 vs all
+roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+
+
+```
+

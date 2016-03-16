@@ -1,0 +1,163 @@
+---
+title: "T2 features added diagnostic value"
+author: "Cristina Gallego"
+date: "March 14, 2016"
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+    theme: cerulean
+---
+
+- This uses tree-ensembles based T2 features in addition to the relevant and tentative T1+T2w features
+- This code analysis T2w added diagnostic value by comparing with ensembles of only T1w DCE-based features
+- T2w discrimination ability (added pAUC ROC value)
+
+```{r setupParent}
+knitr::opts_chunk$set(cache=TRUE, cache.path = "parent_cache/", fig.path="parent_figure/")
+```
+
+
+```{r set-options, cache=FALSE, message=FALSE}
+options(width = 95)
+
+library(caret)
+require(ggplot2)
+library("RSQLite")
+library(klaR)
+library(pROC)
+library("Boruta")
+require(data.table)
+library(RRF)
+library(R.utils)
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(adabag)
+library(R.utils)
+
+loppath = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/"
+setwd(loppath)
+source("functions.R")
+load("Inputs/allpartitionsetD")
+
+## Add LMSIR predicted and T2wBIRADS predicted
+LMSIR_lop <- loadToEnv(("Inputs/finalregressorsLMSIR_T2w.RData"))[["LMSIR_lop"]]; 
+perfT2wSI_lop <- loadToEnv(("Inputs/final_classifierT2wSI_boosting.RData"))[["perfT2wSI_lop"]]; 
+
+bestune_imgT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_imgT2"]];
+rfbestune_imgT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfbestune_imgT2"]];
+bestune_allT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_allT2"]];
+rfbestune_allT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfbestune_allT2"]];
+bestune_imgT1only <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_imgT1only"]];
+rfbestune_imgT1only <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfbestune_imgT1only"]];
+bestune_T1T2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_T1T2"]];
+rfT1T2rfcvperf <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfT1T2rfcvperf"]];
+
+npatients = length(uniq_cad)
+
+``` 
+
+bagging or boosting for final CAD ensembles? compare cv.errors
+===========
+```{r baggingorboosting}
+
+## from previous cv parameters
+# pick winner between 
+if(bestune_imgT2$cv.error <= rfbestune_imgT2$cv.error[1]){
+  bestune_imgT2 = bestune_imgT2
+  bestune_imgT2$class = "boosting"
+}else{
+  bestune_imgT2 = rfbestune_imgT2
+  bestune_imgT2$class = "bagging"
+}
+print(bestune_imgT2)
+
+
+# pick winner between 
+if(bestune_allT2$cv.error <= rfbestune_allT2$cv.error[1]){
+  bestune_allT2 = bestune_allT2
+  bestune_allT2$class = "boosting"
+}else{
+  bestune_allT2 = rfbestune_allT2
+  bestune_allT2$class = "bagging"
+}
+print(bestune_allT2)
+
+
+# pick winner between 
+if(bestune_imgT1only$cv.error <= rfbestune_imgT1only$cv.error[1]){
+  bestune_imgT1only = bestune_imgT1only
+  bestune_imgT1only$class = "boosting"
+}else{
+  bestune_imgT1only = rfbestune_imgT1only
+  bestune_imgT1only$class = "bagging"
+}
+print(bestune_imgT1only)
+
+
+# pick winner between 
+if(bestune_T1T2$cv.error <= rfT1T2rfcvperf$cv.error[1]){
+  bestune_T1T2 = bestune_T1T2
+  bestune_T1T2$class = "boosting"
+}else{
+  bestune_imgT1only = rfT1T2rfcvperf
+  bestune_imgT1only$class = "bagging"
+}
+print(bestune_T1T2)
+
+
+```
+
+
+
+l-o-p final performance comparison:
+=================================
+```{r lopfinal, fig.width=12, fig.height=12, warning=FALSE}
+
+perf_imgT2 = data.frame();  lopaccu_imgT2 = c(); 
+perf_allT2 = data.frame();  lopaccu_allT2 = c(); 
+perf_imgT1 = data.frame();  lopaccu_imgT1 = c(); 
+perf_all = data.frame();    lopaccu_all = c(); 
+
+lopcum_results = data.frame() ## just this when no previous run
+
+## holders for reature rankings
+imgT2featsel = data.frame() 
+allT2featsel = data.frame() 
+imgT1featsel = data.frame() 
+allfeatsel = data.frame() 
+
+```
+
+```{r bringInbatch1, child="lop-batch1.Rmd"}
+ 
+```
+ 
+```{r bringInbatch2, child="lop-batch2.Rmd"}
+
+```
+
+```{r bringInbatch3, child="lop-batch3.Rmd"}
+
+```
+ 
+```{r bringInbatch4, child="lop-batch4.Rmd"}
+ 
+```
+ 
+```{r bringInbatch5, child="lop-batch5.Rmd"}
+ 
+```
+
+```{r bringInbatch6, child="lop-batch6.Rmd"}
+
+```
+
+
+```{r}
+save.image("Outputs/CADT2_addeddiagvalue_final.RData")
+```
+
+
+

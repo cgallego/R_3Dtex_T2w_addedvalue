@@ -1,0 +1,406 @@
+---
+title: "Analysis of results"
+author: "Cristina Gallego"
+date: "March 14, 2016"
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+    theme: cerulean
+---
+
+Analysis of results by reasons
+==========
+```{r}
+
+imagingdetails = imagingdetails[rownames(lesioninfo),]
+path_tores = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/CADT2_addeddiagvalue.RData"
+perf_all <- loadToEnv((path_tores))[["perf_all"]]; 
+lopcum_results <- loadToEnv((path_tores))[["lopcum_results"]]; 
+
+## investigate errors
+errors = perf_all[perf_all$pred!=perf_all$obs,]
+caseids = errors$id
+seqdf = data.frame()
+
+for(k in 1:length(caseids)){
+  df = data.frame(id=caseids[k])
+  radreport = imagingdetails[imagingdetails$lesion_id==caseids[k],"original_report_txt"]
+  cat(radreport)
+  if(grepl("VIBRANT", radreport)){df$T1w="VIBRANT"}else{
+    df$T1w="REVIEW"; 
+    }
+  if(grepl("T2 weighted FSE", radreport)){df$T2w="T2 weighted FSE"}else{
+    df$T2w="REVIEW"; print(perf_all[perf_all$id==caseids[k],])
+  }
+  df$C = perf_all[perf_all$id==caseids[k],"C"]
+  df$NC = perf_all[perf_all$id==caseids[k],"NC"]
+  df$pred = perf_all[perf_all$id==caseids[k],"pred"]
+  df$obs = perf_all[perf_all$id==caseids[k],"obs"]
+
+  # so far print update
+  print(df)
+  print(lesioninfo[lesioninfo$lesion_id==caseids[k],c(1,3,6:7,13,25:27)])
+  ## find prior histories
+  lesioncomts = lesioninfo[lesioninfo$lesion_id==caseids[k],"proc_lesion_comments_txt"]
+  cat(lesioncomts)
+  surgery=c(" ")
+  if(grepl("mammoplasties", lesioncomts)){surgery = list(c(surgery, "mammoplasties, "))}
+  if(grepl("lumpectomy", lesioncomts)){surgery = list(c(surgery, "lumpectomy, "))}
+  
+  df$surgery = list(c(surgery,lesioncomts))
+  
+  # asppend
+  seqdf = rbind(seqdf, df)
+  
+   ## pause  
+#   cat ("Press [enter] to continue")
+#   line <- readline()
+}
+
+
+# subset errors
+errors = seqdf[seqdf$pred!=seqdf$obs,]
+save(errors, file="C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalueRdata/errors.RData")
+
+```
+
+plot final results
+=================================
+```{r finalres, fig.width=12, fig.height=12, warning=FALSE}
+
+source('functions.R', encoding = 'UTF-8')
+
+# plot
+require(ggplot2)
+lop_accuracies = data.frame(Accuracy=lopaccu_imgT2, type="imgT2w")
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_allT2, type="imgT2w+predT2w"))
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_imgT1, type="imgT1w"))
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_all, type="imgT1+imgT2w+predT2w"))
+
+p <- ggplot(lop_accuracies, aes(type, Accuracy, colour=type))
+p + geom_boxplot() + geom_jitter(width = 0.2)
+
+
+# plot features
+## group with all of the features spaces combined, most contributing T2w feature
+
+## imgT2featsel ###########
+# pick frequency of 75% or higher as very common feature
+dfimgT2 = data.frame(table(imgT2featsel$selfeat))
+dfimgT2$high = (dfimgT2$Freq>=0.75*max(imgT2featsel$lop))*1
+print(dfimgT2[dfimgT2$high==1, ])
+
+#qplot(factor(selfeat), data=imgT2featsel, geom="bar", fill=factor(high))
+ggplot(dfimgT2, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("imgT2featsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+## allT2featsel ########### 
+# pick frequency of 75% or higher as very common feature
+dfallT2 = data.frame(table(allT2featsel$selfeat))
+dfallT2$high = (dfallT2$Freq>=0.75*max(allT2featsel$lop))*1
+print(dfallT2[dfallT2$high==1, ])
+
+
+#qplot(factor(selfeat), data=allT2featsel, geom="bar", fill=factor(high))
+ggplot(dfallT2, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("allT2featsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+## imgT1featsel ########### 
+# pick frequency of 75% or higher as very common feature
+dfimgT1 = data.frame(table(imgT1featsel$selfeat))
+dfimgT1$high = (dfimgT1$Freq>=0.75*max(imgT1featsel$lop))*1
+print(dfimgT1[dfimgT1$high==1, ])
+
+
+#qplot(factor(selfeat), data=imgT1featsel, geom="bar", fill=factor(high))
+ggplot(dfimgT1, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("imgT1featsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+## allfeatsel ########### 
+# pick frequency of 75% or higher as very common feature
+dfall = data.frame(table(allfeatsel$selfeat))
+dfall$high = (dfall$Freq>=0.5*max(allfeatsel$lop))*1
+print(dfall[dfall$high==1, ])
+
+
+#qplot(factor(selfeat), data=allfeatsel, geom="bar", fill=factor(high))
+ggplot(dfall, aes(x=Var1, y=Freq, fill=factor(high))) + 
+  geom_bar(stat = "identity") + coord_flip() +
+  ggtitle("allfeatsel") +
+  labs(y="featsel frequency", x=" ") +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=22, hjust=0))+
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#666666", face="bold", size=16))
+
+
+
+########### 
+## plot ROCs each pass individually in l-o-p heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(perf_imgT2$obs, perf_imgT2$C, 
+                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(perf_allT2$obs, perf_allT2$C, 
+                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(perf_imgT1$obs, perf_imgT1$C,
+                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+par(new=TRUE)
+p4 = calcAUC_plot(perf_all$obs, perf_all$C,
+                           xptext=0.75, yptext=0.45 ,colors[14], atitle="ROCs leave-one-patient out test ")
+
+legend("bottomright", 
+       legend = c(paste0("imgT2w"),
+                  paste0("imgT2w+predT2w"),
+                  paste0("imgT1w"),
+                  paste0("imgT1+imgT2w+predT2w")),
+       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+
+
+# find significants: only imgT2 vs. allT2
+roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
+# find significants: mass imgT1 vs all
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+# find significants: mass allT2 vs all
+roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+
+
+```
+
+
+Results by subpopulation of patients
+============
+```{r fig.width=12, fig.height=12, warning=FALSE}
+
+allfT2 = read_T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+datasets = data.frame(rbind(allfT2[[2]], allfT2[[1]]), check.names = FALSE)
+datasetsinfo = data.frame(cbind(rbind(allfT2[[6]],allfT2[[5]]),
+                                BIRADS_T2wSI = datasets$find_t2_signal_int), check.names = FALSE) 
+summary(factor(datasetsinfo$lesion_label))
+
+# subset by mass = 447, nonmass = 243
+##################
+massids=subset(datasetsinfo, lesion_label=="massB" | lesion_label=="massM")
+nonmassids=subset(datasetsinfo, lesion_label=="nonmassB" | lesion_label=="nonmassM")
+
+# Get datasets based on ids
+# For Masses
+##################
+massperf_imgT2 = data.frame();  massperf_allT2 = data.frame();
+massperf_imgT1 = data.frame();  massperf_all = data.frame();
+
+for(mi in massids$lesion_id){
+  if(mi %in% massids$lesion_id){
+    massperf_imgT2 = rbind(massperf_imgT2, perf_imgT2[perf_imgT2$id==mi,])
+    massperf_allT2 = rbind(massperf_allT2, perf_allT2[perf_allT2$id==mi,])
+    massperf_imgT1 = rbind(massperf_imgT1, perf_imgT1[perf_imgT1$id==mi,])
+    massperf_all = rbind(massperf_all, perf_all[perf_all$id==mi,])
+  }
+}
+
+## plot ROCs each pass individually in l-o-p heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(massperf_imgT2$obs, massperf_imgT2$C, 
+                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(massperf_allT2$obs, massperf_allT2$C, 
+                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(massperf_imgT1$obs, massperf_imgT1$C,
+                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+par(new=TRUE)
+p4 = calcAUC_plot(massperf_all$obs, massperf_all$C,
+                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for mass ROCs leave-one-patient out test ")
+
+legend("bottomright", 
+       legend = c(paste0("imgT2w"),
+                  paste0("imgT2w+predT2w"),
+                  paste0("imgT1w"),
+                  paste0("imgT1+imgT2w+predT2w")),
+       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+
+# find significants: only imgT2 vs. allT2
+roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
+# find significants: mass imgT1 vs all
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+# find significants: mass allT2 vs all
+roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+
+
+
+# Get datasets based on ids
+# For Non-Masses
+##################
+nonmassperf_imgT2 = data.frame();  nonmassperf_allT2 = data.frame();
+nonmassperf_imgT1 = data.frame();  nonmassperf_all = data.frame();
+
+for(mi in nonmassids$lesion_id){
+  if(mi %in% nonmassids$lesion_id){
+    nonmassperf_imgT2 = rbind(nonmassperf_imgT2, perf_imgT2[perf_imgT2$id==mi,])
+    nonmassperf_allT2 = rbind(nonmassperf_allT2, perf_allT2[perf_allT2$id==mi,])
+    nonmassperf_imgT1 = rbind(nonmassperf_imgT1, perf_imgT1[perf_imgT1$id==mi,])
+    nonmassperf_all = rbind(nonmassperf_all, perf_all[perf_all$id==mi,])
+  }
+}
+
+## plot ROCs each pass individually in l-o-p heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(nonmassperf_imgT2$obs, nonmassperf_imgT2$C, 
+                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(nonmassperf_allT2$obs, nonmassperf_allT2$C, 
+                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(nonmassperf_imgT1$obs, nonmassperf_imgT1$C,
+                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+par(new=TRUE)
+p4 = calcAUC_plot(nonmassperf_all$obs, nonmassperf_all$C,
+                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for nonmass ROCs leave-one-patient out test ")
+
+legend("bottomright", 
+       legend = c(paste0("imgT2w"),
+                  paste0("imgT2w+predT2w"),
+                  paste0("imgT1w"),
+                  paste0("imgT1+imgT2w+predT2w")),
+       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+
+# find significants: only imgT2 vs. allT2
+roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
+# find significants: nonmass imgT1 vs all
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+# find significants: nonmass allT2 vs all
+roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+
+
+
+# subset by Hyperintense = 106, Hypointense or not seen = 161,  Slightly hyperintense = 68, ntotal = 335
+# None = 355
+
+##################
+summary(factor(datasetsinfo$BIRADS_T2wSI))
+T2wids=subset(datasetsinfo, BIRADS_T2wSI=="Hyperintense" | 
+                              BIRADS_T2wSI=="Hypointense or not seen" |
+                              BIRADS_T2wSI=="Slightly hyperintense")
+NoneT2wids=subset(datasetsinfo, BIRADS_T2wSI=="None")
+
+# Get datasets based on ids
+# For T2wids
+##################
+T2wsiperf_imgT2 = data.frame();  T2wsiperf_allT2 = data.frame();
+T2wsiperf_imgT1 = data.frame();  T2wsiperf_all = data.frame();
+
+for(t2si in T2wids$lesion_id){
+  if(t2si %in% T2wids$lesion_id){
+    T2wsiperf_imgT2 = rbind(T2wsiperf_imgT2, perf_imgT2[perf_imgT2$id==t2si,])
+    T2wsiperf_allT2 = rbind(T2wsiperf_allT2, perf_allT2[perf_allT2$id==t2si,])
+    T2wsiperf_imgT1 = rbind(T2wsiperf_imgT1, perf_imgT1[perf_imgT1$id==t2si,])
+    T2wsiperf_all = rbind(T2wsiperf_all, perf_all[perf_all$id==t2si,])
+  }
+}
+
+
+## plot ROCs each pass individually in l-o-p heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(T2wsiperf_imgT2$obs, T2wsiperf_imgT2$C, 
+                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(T2wsiperf_allT2$obs, T2wsiperf_allT2$C, 
+                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(T2wsiperf_imgT1$obs, T2wsiperf_imgT1$C,
+                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+par(new=TRUE)
+p4 = calcAUC_plot(T2wsiperf_all$obs, T2wsiperf_all$C,
+                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for BIRADS T2wSI ROCs leave-one-patient out test ")
+
+legend("bottomright", 
+       legend = c(paste0("imgT2w"),
+                  paste0("imgT2w+predT2w"),
+                  paste0("imgT1w"),
+                  paste0("imgT1+imgT2w+predT2w")),
+       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+
+# find significants: only imgT2 vs. allT2
+roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
+# find significants: imgT1 vs all
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+# find significants: allT2 vs all
+roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+
+
+# Get datasets based on ids
+# For T2wids
+##################
+NoneT2wsiperf_imgT2 = data.frame();  NoneT2wsiperf_allT2 = data.frame();
+NoneT2wsiperf_imgT1 = data.frame();  NoneT2wsiperf_all = data.frame();
+
+for(t2si in NoneT2wids$lesion_id){
+  if(t2si %in% NoneT2wids$lesion_id){
+    NoneT2wsiperf_imgT2 = rbind(NoneT2wsiperf_imgT2, perf_imgT2[perf_imgT2$id==t2si,])
+    NoneT2wsiperf_allT2 = rbind(NoneT2wsiperf_allT2, perf_allT2[perf_allT2$id==t2si,])
+    NoneT2wsiperf_imgT1 = rbind(NoneT2wsiperf_imgT1, perf_imgT1[perf_imgT1$id==t2si,])
+    NoneT2wsiperf_all = rbind(NoneT2wsiperf_all, perf_all[perf_all$id==t2si,])
+  }
+}
+
+## plot ROCs each pass individually in l-o-p heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(NoneT2wsiperf_imgT2$obs, NoneT2wsiperf_imgT2$C, 
+                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(NoneT2wsiperf_allT2$obs, NoneT2wsiperf_allT2$C, 
+                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(NoneT2wsiperf_imgT1$obs, NoneT2wsiperf_imgT1$C,
+                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+par(new=TRUE)
+p4 = calcAUC_plot(NoneT2wsiperf_all$obs, NoneT2wsiperf_all$C,
+                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for None BIRADS T2wSI ROCs leave-one-patient out test ")
+
+legend("bottomright", 
+       legend = c(paste0("imgT2w"),
+                  paste0("imgT2w+predT2w"),
+                  paste0("imgT1w"),
+                  paste0("imgT1+imgT2w+predT2w")),
+       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+
+# find significants: only imgT2 vs. allT2
+roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
+# find significants: imgT1 vs all
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+# find significants: allT2 vs all
+roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+
+
+```
+

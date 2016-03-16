@@ -1,0 +1,149 @@
+---
+title: "T2 features added diagnostic value"
+author: "Cristina Gallego"
+date: "March 14, 2016"
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+    theme: cerulean
+---
+
+- This uses tree-ensembles based T2 features in addition to the relevant and tentative T1+T2w features
+- This code analysis T2w added diagnostic value by comparing with ensembles of only T1w DCE-based features
+- T2w discrimination ability (added pAUC ROC value)
+
+```{r setupParent}
+knitr::opts_chunk$set(cache=TRUE, cache.path = "parent_cache/", fig.path="parent_figure/")
+```
+
+
+```{r set-options, cache=FALSE, message=FALSE}
+options(width = 135)
+
+library(caret)
+require(ggplot2)
+library("RSQLite")
+library(klaR)
+library(pROC)
+library("Boruta")
+require(data.table)
+library(RRF)
+library(R.utils)
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(adabag)
+library(R.utils)
+
+loppath = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/"
+setwd(loppath)
+source("functions.R")
+
+## Add LMSIR predicted and T2wBIRADS predicted
+LMSIR_lop <- loadToEnv(("Inputs/finalregressorsLMSIR_T2w.RData"))[["LMSIR_lop"]]; 
+perfT2wSI_lop <- loadToEnv(("Inputs/final_classifierT2wSI_boosting.RData"))[["perfT2wSI_lop"]]; 
+
+bestune_imgT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_imgT2"]];
+rfbestune_imgT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfbestune_imgT2"]];
+bestune_allT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_allT2"]];
+rfbestune_allT2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfbestune_allT2"]];
+bestune_imgT1only <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_imgT1only"]];
+rfbestune_imgT1only <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfbestune_imgT1only"]];
+bestune_T1T2 <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["bestune_T1T2"]];
+rfT1T2rfcvperf <- loadToEnv(("Inputs/T2_addeddiagvalue_params_wbagging.RData"))[["rfT1T2rfcvperf"]];
+
+
+``` 
+
+bagging or boosting for final CAD ensembles? compare cv.errors
+===========
+```{r baggingorboosting}
+
+## from previous cv parameters
+# print winner between 
+if(bestune_imgT2$cv.error <= rfbestune_imgT2$cv.error[1]){
+  print(cbind(bestune_imgT2, "boosting"))
+}else{
+  print(cbind(rfbestune_imgT2, "bagging"))
+}
+
+# print winner between 
+if(bestune_allT2$cv.error <= rfbestune_allT2$cv.error[1]){
+  print(cbind(bestune_allT2, "boosting"))
+}else{
+  print(cbind(rfbestune_allT2, "bagging"))
+}
+
+# print winner between 
+if(bestune_imgT1only$cv.error <= rfbestune_imgT1only$cv.error[1]){
+  print(cbind(bestune_imgT1only, "boosting"))
+}else{
+  print(cbind(rfbestune_imgT1only, "bagging"))
+}
+
+# print winner between 
+if(bestune_T1T2$cv.error <= rfT1T2rfcvperf$cv.error[1]){
+  print(cbind(bestune_T1T2, "boosting"))
+}else{
+  print(cbind(rfT1T2rfcvperf, "bagging"))
+}
+
+
+```
+
+
+
+kf-cv final performance comparison (3Dtext vs 2Dtex)
+=================================
+```{r kf-cv, fig.width=12, fig.height=12, warning=FALSE}
+# 1) From 100% dataset, Create train/validation (80%) / heldout (20%) partitions
+sqlite <- dbDriver("SQLite")
+conn <- dbConnect(sqlite, "textureUpdatedFeatures.db")
+
+# 2) all T1w features
+lesionsQuery <- dbGetQuery(conn, "SELECT *
+         FROM  stage1features
+           INNER JOIN lesion ON (stage1features.lesion_id = lesion.lesion_id)
+           INNER JOIN f_T2 ON (stage1features.lesion_id = f_T2.lesion_id)")
+ 
+# For bootstrap resampling, createResample is used
+# Randomization is done at the patient level, so that bootstrapping preserves lesion independence
+lesionsQuery = subset(lesionsQuery, lesion_label != "fociB" & lesion_label != "fociM" ) # exclude foci at this point
+id_cad_pts = lesionsQuery$cad_pt_no_txt
+uniq_cad = unique(lesionsQuery$cad_pt_no_txt)
+npatients = 1:length(uniq_cad)
+  
+# when y is a factor in an attempt to balance the class distributions within the splits.
+# The names of the list objects will denote the fold membership using the pattern 
+# resamples." meaning the ith section (of k) of the jth cross-validation set (of times).
+set.seed(1234)
+npatients = length(uniq_cad)
+kfcvpartitionsetD <- createFolds(y = 1:length(uniq_cad),## the outcome data are needed
+                                k = 10, 
+                                list = TRUE)
+
+save(kfcvpartitionsetD, npatients, uniq_cad, id_cad_pts,
+     file="C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/kfcvpartitionsetD")
+
+```
+
+
+```{r bringIn3Dtex-boost, child="3Dtex-boost.Rmd"}
+ 
+```
+ 
+```{r bringIn2Dtex-boost, child="2Dtex-boost.Rmd"}
+ 
+```
+ 
+
+
+
+
+```{r}
+save.image("Outputs/CADT2_addeddiagvalue_10fcvboosting.RData")
+```
+
+
+
