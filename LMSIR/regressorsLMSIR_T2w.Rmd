@@ -1,0 +1,368 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+ 
+Predictor model of LMSIR:
+=============================
+- This code creates a regression based predictor of LMSIR and add them to the pool of 55 T2w features for a total of 57 T2w featues
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width =95)
+
+library(caret)
+require(ggplot2)
+library("RSQLite")
+
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR")
+source('C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/functions.R')
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/allpartitionsetD")
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR/Rdata/T2_featurespred_LMSIR.RData")
+# to locate selected features by boruta for LMSIR: ordered_zscores
+# to locate selected features by RRF for LMSIR: allLMSIRfeatures
+
+```
+
+```{r fig.width=12, fig.height=12, warning=FALSE}
+
+# read datasets
+npatients = length(uniq_cad)
+allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+    
+## formant
+allfeatures = rbind(allf[[1]], allf[[2]])
+alllesioninfo = rbind(allf[[5]], allf[[6]])
+
+### print number of total lesions 
+# before was ##   C / NC = 110 / 177
+print(summary(as.factor(allfeatures$orig_label)))
+
+#######################
+# format datasets with find_t2_signal_int as response variable
+LMSIRt2_signal = na.omit(cbind(allfeatures["LMSIR"], allfeatures[,2:ncol(allfeatures)]))
+
+# Create a training set containing a random sample of 75% observations, and a test set containing the remaining observations.
+set.seed(01)
+train = createDataPartition(y = LMSIRt2_signal$orig_label, ## the outcome data are needed
+                                 p = .9, ## The percentage of data in the training set
+                                 list = TRUE) ## The format of the results. 
+
+LMSIRt2_signal = LMSIRt2_signal[, -c(202,ncol(LMSIRt2_signal))]
+summary(LMSIRt2_signal$LMSIR)
+
+#######################
+# Subset previuosly selected features
+# for Boruta
+borutasel = unique(ordered_zscores[,2])
+rrfsel = as.character(unique(allLMSIRfeatures[,1]))
+LMSIR_featsel = unique(borutasel, rrfsel)
+
+
+library (randomForest) 
+set.seed(01)
+LMSIRrf = randomForest(LMSIR ~., data=LMSIRt2_signal[,c("LMSIR",LMSIR_featsel)], 
+                       subset=train$Resample1, mtry=sqrt(ncol(LMSIRt2_signal)-2), importance =TRUE)
+print(LMSIRrf)
+
+# How well does this bagged model perform on the test set?
+LMSIR.test = LMSIRt2_signal[-train$Resample1 ,"LMSIR"]
+LMSIRrf.hat = predict(LMSIRrf, newdata=LMSIRt2_signal[-train$Resample1,]) 
+plot(LMSIRrf.hat, LMSIR.test) 
+abline(0,1) 
+MSErf = mean((LMSIRrf.hat - LMSIR.test)^2)
+sqrtMSErf = sqrt(MSErf)
+sqrtMSErf
+
+
+##### Boosting trees
+#We run gbm() with the option distribution="gaussian" since this is a regression problem
+LMSIRt2_signal$find_t2_signal_int = as.factor(LMSIRt2_signal$find_t2_signal_int)
+library(gbm)
+LMSIRboost=gbm(LMSIR~.,data=LMSIRt2_signal[train$Resample1,],
+               distribution="gaussian",
+               n.trees=500, interaction.depth=1, shrinkage =0.1, verbose=F)
+
+# The summary() function produces a relative influence plot and also outputs the relative influence statistics
+print(LMSIRboost)
+summary(LMSIRboost)
+LMSIR.test = LMSIRt2_signal[-train$Resample1 ,"LMSIR"]
+LMSIRboost.hat = predict(LMSIRboost, newdata=LMSIRt2_signal[-train$Resample1,], n.trees=500) 
+
+par(mfrow=c(1,1))
+plot(LMSIRboost.hat, LMSIR.test) 
+abline(0,1) 
+MSErf = mean((LMSIRboost.hat - LMSIR.test)^2)
+sqrtMSErf = sqrt(MSErf)
+sqrtMSErf
+
+###############
+### PRODUCE RAND FOREST via RPART (control # trees))
+###################################################
+### code forest Train: 
+### parameters, T= # of trees, D= tree depth, dat
+###################################################
+library(MASS)
+library(klaR)
+library(caret)
+library(rpart)
+library(rpart.plot)
+require(ggplot2)
+
+rpart_forestTrainLMSIR <- function(T, D, TrainsetD) {
+  # set control
+  fitparm = rpart.control(maxdepth = D, minsplit = 1, minbucket = 1, cp = -1,  xval = 10,
+                          maxcompete = 0, maxsurrogate = 5, usesurrogate = 0, surrogatestyle = 0)
+  
+  # init forest
+  forest = list()
+  for (t in 1:T){
+    #cat("Tree # ", t, "\n")  
+    # find subsample of var
+    subvar = sample(2:ncol(TrainsetD)-2, sqrt(ncol(TrainsetD)-2), replace = TRUE)
+    subfeat = colnames(TrainsetD)[subvar]
+    
+    # train tree
+    treedata <- rpart(paste("LMSIR ~ ", paste(subfeat, collapse= "+")), 
+                      data =TrainsetD, control=fitparm)
+    
+    # display the probability per class of observations in the node (conditioned on the node, sum across a     node is 1) plus the percentage of observations in the node. 
+    if (T<=1){
+      print(treedata)
+      prp(treedata, type=2, digits=3, extra = 100, under=TRUE, nn=TRUE, col="black", 
+          box.col=rainbow(2)[2], varlen=0, faclen=0, branch.type=0, gap=0, cex=.7,
+          fallen.leaves=TRUE) # use fallen.leaves=TRUE, to plot at bottom  
+    }  
+    
+    # append
+    forest <- append(forest, list(tree = treedata))    
+  }
+  
+  output <- list(forest=forest)
+  return(output)
+}
+
+###################################################
+### code forest Test: 
+### parameters, T= # of trees, forest, TrainsetD, TestsetD
+###################################################
+rpart_forestTestLMSIR <- function(T, TrainsetD, TestsetD, forest) {
+  
+  yhattrain=list()
+  for (t in 1:T){
+    # Calcultate posterior Probabilities on grid points
+    temp <- predict(forest[t]$tree, newdata = TrainsetD) #
+    yhattrain <- append(yhattrain, list(cpo = temp))
+  }
+  
+  # run testing cases
+  yhattest=list()
+  for (t in 1:T){
+    # Calcultate posterior Probabilities on grid points
+    temp <- predict(forest[t]$tree, newdata = TestsetD) #
+    yhattest <- append(yhattest, list(cpo = temp))
+  }
+  
+  # performance on Train/Test set separately
+  # extract ensamble class probabilities (when T > 1)
+  trainpts = yhattrain[1]$cpo
+  testpts = yhattest[1]$cpo
+  # init ensample class posteriors
+  enyhattrain <- matrix(, nrow = nrow(as.data.frame(trainpts)), ncol = 1)
+  enyhattest <- matrix(, nrow = nrow(as.data.frame(testpts)), ncol = 1)
+  enyhattrain[,1] = yhattrain[1]$cpo
+  enyhattest[,1] = yhattest[1]$cpo
+  if(T>=2){
+    for (t in 2:T){
+      #train
+      enyhattrain[,1] = enyhattrain[,1]+yhattrain[t]$cpo
+      #test
+      enyhattest[,1] = enyhattest[,1]+yhattest[t]$cpo
+    }
+  }
+  # majority voting averaging
+  enyhattrain = (1/T)*enyhattrain
+  enyhattest = (1/T)*enyhattest
+  
+  output <- list(etrain = enyhattrain[,1], etest=enyhattest[,1])
+  return(output)
+}
+
+```
+
+
+Building a Random Forest regresor for Tw2 LMSIR:  Numerical predictor of Lesion-to-muscle ratio on T2wi
+==========
+
+```{r fig.width=12, fig.height=12, warning=FALSE}
+###################################################
+# create grid of evaluation points
+gT = c(25,100,200,300,500,750,1000,1500,2000)
+gD = c(1,3,5,10,20)
+grd <- expand.grid(x = gD, y = gT)
+grd$z = grd$x/500 ## similar to gS = c(0.001,0.01,0.025,0.1,0.5) but without expanding
+ 
+grdperf = data.frame(grd)
+grdperf$RF.sqrtMSEtrain = 0.0
+grdperf$RF.sqrtMSEtest = 0.0
+grdperf$boost.sqrtMSEtrain = 0.0
+grdperf$boost.sqrtMSEtest = 0.0
+
+library(gbm)
+# perform grid greedy search
+for(k in 1:nrow(grd)){
+    D=grd[k,1]
+    ntrees=grd[k,2]
+    shrink=grd[k,3]
+    cat("RF #Trees ", ntrees , ", maxD = ", D,"\n")
+    cat("bosted #Trees ", ntrees , ", shrink = ", shrink,"\n")
+    # train a Random Forest with rcart trees
+    trainLMSIR = LMSIRt2_signal[train$Resample1,c("LMSIR",LMSIR_featsel)]
+    testLMSIR = LMSIRt2_signal[-train$Resample1,c("LMSIR",LMSIR_featsel)]   
+    # train
+    rfLMSIR = rpart_forestTrainLMSIR(ntrees, D, trainLMSIR ) 
+    perfF <- rpart_forestTestLMSIR(ntrees, trainLMSIR, testLMSIR, rfLMSIR$forest)
+    
+    # on training
+    par(mfrow=c(1,2))
+    LMSIR.train=trainLMSIR$LMSIR
+    #plot(perfF$etrain, LMSIR.train)
+    #abline (0,1) 
+    MSEtrain = mean((perfF$etrain -LMSIR.train)^2)
+    sqrtMSEtrain = sqrt(MSEtrain)
+    print("=========")
+    print(paste0("RF.sMSEtrain = ", sqrtMSEtrain))
+      
+    # on testing
+    LMSIR.test=testLMSIR$LMSIR 
+    #plot(perfF$etest, LMSIR.test)
+    #abline (0,1) 
+    MSEtest = mean((perfF$etest -LMSIR.test)^2)
+    sqrtMSEtest = sqrt(MSEtest)
+    print(paste0("RF.sMSEtest = ", sqrtMSEtest))
+
+    # train boosted gradient trees to compare with RF
+    #set.seed(03)
+    LMSIRboost=gbm(LMSIR ~ . ,data=trainLMSIR, distribution="gaussian", 
+                   n.trees=ntrees, shrinkage=shrink, verbose=FALSE)
+  
+    # The summary() function produces a relative influence plot and also outputs the relative influence statistics
+    #print(LMSIRboost)
+    
+    # on training
+    par(mfrow=c(1,2))
+    LMSIRboost.hattrain = predict(LMSIRboost, newdata=trainLMSIR, n.trees=ntrees) 
+    #plot(LMSIRboost.hattrain, LMSIR.train)
+    #abline (0,1) 
+    MSEtrainboost = mean((LMSIRboost.hattrain -LMSIR.train)^2)
+    sqrtMSEtrainboost = sqrt(MSEtrainboost)
+    print(paste0("boost.sMSEtrain = ", sqrtMSEtrainboost))
+ 
+    # on testing
+    LMSIRboost.hattest = predict(LMSIRboost, newdata=testLMSIR, n.trees=ntrees)   
+    #plot(LMSIRboost.hattest, LMSIR.test)
+    #abline (0,1) 
+    MSEtestboost = mean((LMSIRboost.hattest -LMSIR.test)^2)
+    sqrtMSEtestboost = sqrt(MSEtestboost)
+    print(paste0("boost.sMSEtest = ", sqrtMSEtestboost))
+    print("=========")
+    
+    # collect data
+    grdperf$RF.sqrtMSEtrain[k] = grdperf$RF.sqrtMSEtrain[k] + sqrtMSEtrain
+    grdperf$RF.sqrtMSEtest[k] = grdperf$RF.sqrtMSEtest[k] + sqrtMSEtest
+    grdperf$boost.sqrtMSEtrain[k] = grdperf$boost.sqrtMSEtrain[k] + sqrtMSEtrainboost
+    grdperf$boost.sqrtMSEtest[k] = grdperf$boost.sqrtMSEtest[k] + sqrtMSEtestboost
+
+}
+
+print(paste0("min RF.sqrtMSE = ",min(grdperf$RF.sqrtMSEtest)))
+RFbestune = grdperf[grdperf$RF.sqrtMSEtest == min(grdperf$RF.sqrtMSEtest),][1,]
+print(RFbestune)
+print(paste0("min boost.sqrtMSE = ",min(grdperf$boost.sqrtMSEtest)))
+boostbestune = grdperf[grdperf$boost.sqrtMSEtest == min(grdperf$boost.sqrtMSEtest),][1,]
+print(boostbestune)
+
+# reformat results to plot
+library(gridExtra)
+# for RF
+RFgrdperfLMSIR = data.frame(ntrees=grdperf$y, Depth=factor(grdperf$x))
+RFgrdperfLMSIR$sqrtMSE_train = grdperf$RF.sqrtMSEtrain
+RFgrdperfLMSIR$sqrtMSE_test = grdperf$RF.sqrtMSEtest
+RFgrdperfLMSIR$regressor = "RF"
+
+p1 <- ggplot(data=RFgrdperfLMSIR, aes(x=ntrees, y=sqrtMSE_train, group=Depth, colour=Depth)) + 
+  geom_line(size=1.5) + theme_bw(base_size = 14, base_family = "") 
+p2 <- ggplot(data=RFgrdperfLMSIR, aes(x=ntrees, y=sqrtMSE_test, group=Depth, colour=Depth)) + 
+  geom_line(size=1.5) + theme_bw(base_size = 14, base_family = "") 
+grid.arrange(p1, p2, nrow = 2)
+
+
+# for boosting trees
+boostgrdperfLMSIR = data.frame(ntrees=grdperf$y, shrink=factor(grdperf$z))
+boostgrdperfLMSIR$sqrtMSE_train = grdperf$boost.sqrtMSEtrain
+boostgrdperfLMSIR$sqrtMSE_test = grdperf$boost.sqrtMSEtest
+boostgrdperfLMSIR$regressor = "boost"
+
+p1 <- ggplot(data=boostgrdperfLMSIR, aes(x=ntrees, y=sqrtMSE_train, group=shrink, colour=shrink)) + 
+  geom_line(size=1.5) + theme_bw(base_size = 14, base_family = "") 
+p2 <- ggplot(data=boostgrdperfLMSIR, aes(x=ntrees, y=sqrtMSE_test, group=shrink, colour=shrink)) + 
+  geom_line(size=1.5) + theme_bw(base_size = 14, base_family = "") 
+grid.arrange(p1, p2, nrow = 2)
+
+```
+
+```{r fig.width=12, fig.height=10, warning=FALSE}
+#pplot
+
+# produce partial dependence plots for these two variables. These plots partial
+# illustrate the marginal effect of the selected variables on the response after
+# dependence integrating out the other variables. 
+par(mfrow=c(3,3))
+plot(LMSIRboost, i="ave_T20")
+plot(LMSIRboost, i="ave_T21")
+plot(LMSIRboost, i="ave_T22")
+plot(LMSIRboost, i="ave_T23")
+plot(LMSIRboost, i="ave_T24")
+plot(LMSIRboost, i="ave_T25")
+plot(LMSIRboost, i="ave_T26")
+plot(LMSIRboost, i="ave_T27")
+plot(LMSIRboost, i="ave_T28")
+
+# plot the top 3
+par(mfrow=c(1,2))
+plot(LMSIRboost, i="T2var_F_r_i")
+plot(LMSIRboost, i="T2grad_margin")
+
+
+```
+
+Parameters to build final regressor
+=======
+```{r}
+
+# pick winner between 
+if(RFbestune$RF.sqrtMSEtest <= boostbestune$boost.sqrtMSEtest){
+  bestune = RFbestune
+  bestune$class = "RF"
+  ntrees = bestune$y
+  D = bestune$x
+  cat("RF #Trees ", ntrees , ", maxD = ", D,"\n")
+  print(bestune)
+}else{
+  bestune = boostbestune
+  bestune$class = "boost"
+  ntrees = bestune$y
+  shrink = bestune$z
+  cat("bosted #Trees ", ntrees , ", shrink = ", shrink,"\n")
+  print(bestune)
+}
+
+```
+
+
+```{r}
+
+save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR/Rdata/regressorsLMSIR_T2w.RData")
+
+```
+

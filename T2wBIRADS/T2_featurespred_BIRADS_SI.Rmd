@@ -1,0 +1,357 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+
+What features are most predictive of BIRADS T2SI?
+================
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width=95)
+
+require(ggplot2)
+library("RSQLite")
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS")
+source('C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/functions.R')
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/allpartitionsetD")
+
+
+```
+
+
+```{r fig.width=12, fig.height=12}
+# read datasets
+npatients = length(uniq_cad)
+allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+    
+## formant
+allfeatures = rbind(allf[[1]], allf[[2]])
+alllesioninfo = rbind(allf[[5]], allf[[6]])
+
+### print number of total lesions 
+# before was ##   C / NC = 140 / 132
+print(summary(as.factor(allfeatures$orig_label)))
+
+#######################
+# format datasets with find_t2_signal_int as response variable
+allfeaturest2_signal = cbind(allfeatures["find_t2_signal_int"],allfeatures[,2:ncol(allfeatures)])
+allfeaturest2_signal = allfeaturest2_signal[-c(199,ncol(allfeatures))]
+
+allfeaturest2_signal$find_t2_signal_int = as.factor(allfeaturest2_signal$find_t2_signal_int)
+summary(allfeaturest2_signal$find_t2_signal_int)
+
+## Multi-class approach
+# via RRF
+library("RRF")
+set.seed(1)
+BIRADS_multi = na.omit(allfeaturest2_signal)
+T2SI_BIRADS_multi = BIRADS_multi$find_t2_signal_int
+BIRADS_multi = BIRADS_multi[-c(1)]
+
+BIRADS_multi_rrf = RRF(BIRADS_multi, T2SI_BIRADS_multi, mtry=1, flagReg = 1, 
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+print(BIRADS_multi_rrf)
+# overall feature importance
+BIRADS_multivarImp = data.frame(varImpPlot(BIRADS_multi_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+multivarImp <- BIRADS_multivarImp[ order(-BIRADS_multivarImp[,1]), ] 
+# pick only non-zero variables
+multivarImp = unique(multivarImp)
+# format
+df = data.frame(selfeat=rownames(multivarImp))
+df$MeanDecreaseAccuracy = multivarImp$MeanDecreaseAccuracy 
+df$SelectedFeatureGroup = "multiClass"
+# append
+allBIRADSfeatures = data.frame()
+allBIRADSfeatures = rbind(allBIRADSfeatures, df)
+
+# plot
+pairs(BIRADS_multi[,rownames(multivarImp)[1:10]], lower.panel=panel.smooth, upper.panel=panel.cor)
+
+
+### Cascade approach: Predict between most contrasting levels, distributing discriminative power
+# first predict between "Intense"(Hyperintense+SlighHyper+hypo) and None or abset
+BIRADS_HyperNone = allfeaturest2_signal
+BIRADS_HyperNone$find_t2_signal_int = factor(ifelse(BIRADS_HyperNone$find_t2_signal_int=="None","None","Intense"))
+BIRADS_HyperNone$find_t2_signal_int = factor(BIRADS_HyperNone$find_t2_signal_int)
+summary(BIRADS_HyperNone$find_t2_signal_int)
+
+# Random Forest feature relevance
+library("RRF")
+set.seed(2)
+BIRADS_HyperNone_wona = na.omit(BIRADS_HyperNone)
+T2SI_HyperNone = BIRADS_HyperNone_wona$find_t2_signal_int
+BIRADS_HyperNone_wona = BIRADS_HyperNone_wona[-c(1)]
+
+BIRADS_HyperNone_rrf = RRF(BIRADS_HyperNone_wona, T2SI_HyperNone, mtry=1, flagReg = 1, 
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+print(BIRADS_HyperNone_rrf)
+
+# overall feature importance
+BIRADS_HyperNonevarImp = data.frame(varImpPlot(BIRADS_HyperNone_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+HyperNonevarImp <- BIRADS_HyperNonevarImp[ order(-BIRADS_HyperNonevarImp[,1]), ] 
+# pick only non-zero variables
+HyperNonevarImp = unique(HyperNonevarImp)
+df = data.frame(selfeat=rownames(HyperNonevarImp))
+df$MeanDecreaseAccuracy = HyperNonevarImp$MeanDecreaseAccuracy 
+df$SelectedFeatureGroup = "Hyper.v.s.None"
+# append
+allBIRADSfeatures = rbind(allBIRADSfeatures, df)
+
+# plot
+pairs(BIRADS_HyperNone_wona[,rownames(HyperNonevarImp)[1:10]], lower.panel=panel.smooth, upper.panel=panel.cor)
+
+
+# Second predict between Intense and not seen ( combine Hyper and Slightly hyper into "Intense")
+BIRADS_IntenseorNot = allfeaturest2_signal[allfeaturest2_signal$find_t2_signal_int != "None", ]
+BIRADS_IntenseorNot$find_t2_signal_int = factor(ifelse(BIRADS_IntenseorNot$find_t2_signal_int=="Hypointense or not seen",
+                                                "Hypointense or not seen","Intense"))
+summary(BIRADS_IntenseorNot$find_t2_signal_int)
+
+# Random Forest feature relevance
+library("RRF")
+set.seed(3)
+BIRADS_IntenseorNot_wona = na.omit(BIRADS_IntenseorNot)
+T2SI_IntenseorNot = BIRADS_IntenseorNot_wona$find_t2_signal_int
+BIRADS_IntenseorNot_wona = BIRADS_IntenseorNot_wona[-c(1)]
+
+BIRADS_IntenseorNot_rrf = RRF(BIRADS_IntenseorNot_wona, T2SI_IntenseorNot, mtry=1, flagReg = 1, 
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+print(BIRADS_IntenseorNot_rrf)
+
+# overall feature importance
+BIRADS_IntenseorNotvarImp = data.frame(varImpPlot(BIRADS_IntenseorNot_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+IntenseorNotvarImp <- BIRADS_IntenseorNotvarImp[ order(-BIRADS_IntenseorNotvarImp[,1]), ] 
+# pick only non-zero variables
+IntenseorNotvarImp = unique(IntenseorNotvarImp)
+df = data.frame(selfeat=rownames(IntenseorNotvarImp))
+df$MeanDecreaseAccuracy = IntenseorNotvarImp$MeanDecreaseAccuracy 
+df$SelectedFeatureGroup = "Intense.v.s.Notseen"
+# append
+allBIRADSfeatures = rbind(allBIRADSfeatures, df)
+
+
+# Thrid predict between HyperIntense and  Slightly hyper
+BIRADS_HyperorSlight = allfeaturest2_signal[allfeaturest2_signal$find_t2_signal_int != "None", ]
+BIRADS_HyperorSlight = BIRADS_HyperorSlight[BIRADS_HyperorSlight$find_t2_signal_int != "Hypointense or not seen", ]
+BIRADS_HyperorSlight$find_t2_signal_int = factor(BIRADS_HyperorSlight$find_t2_signal_int)
+summary(BIRADS_HyperorSlight$find_t2_signal_int)
+
+# Random Forest feature relevance
+library("RRF")
+set.seed(4)
+BIRADS_HyperorSlight_wona = na.omit(BIRADS_HyperorSlight)
+T2SI_HyperorSlight = BIRADS_HyperorSlight_wona$find_t2_signal_int
+BIRADS_HyperorSlight_wona = BIRADS_HyperorSlight_wona[-c(1)]
+
+BIRADS_HyperorSlight_rrf = RRF(BIRADS_HyperorSlight_wona, T2SI_HyperorSlight, mtry=1, flagReg = 1, 
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+print(BIRADS_HyperorSlight_rrf)
+
+# overall feature importance
+BIRADS_HyperorSlightvarImp = data.frame(varImpPlot(BIRADS_HyperorSlight_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+HyperorSlightvarImp <- BIRADS_HyperorSlightvarImp[ order(-BIRADS_HyperorSlightvarImp[,1]), ] 
+# pick only non-zero variables
+HyperorSlightvarImp = unique(HyperorSlightvarImp)
+df = data.frame(selfeat=rownames(HyperorSlightvarImp))
+df$MeanDecreaseAccuracy = HyperorSlightvarImp$MeanDecreaseAccuracy 
+df$SelectedFeatureGroup = "Hyper.v.s.slightlyHyper"
+# append
+allBIRADSfeatures = rbind(allBIRADSfeatures, df)
+
+library("lattice")
+library("latticeExtra")
+require(ggplot2)
+
+# plot
+allBIRADSfeatures = subset(allBIRADSfeatures, MeanDecreaseAccuracy!=0)
+g <- ggplot(allBIRADSfeatures, aes(x = factor(selfeat), weight=MeanDecreaseAccuracy, fill=SelectedFeatureGroup))
+g + geom_bar() + coord_flip() + theme_bw(base_size = 16) + labs(title = "Selected features with RRF for BIRADS T2w SI pred", 
+    x = "", y = "MeanDecreaseAccuracy")
+
+```
+
+Random Forest via permutation tests feature relevance (Boruta)
+=====
+```{r fig.width=10, fig.height=12}
+library("Boruta")
+require(data.table)
+# Color codes: c('green', 'yellow', 'red', 'blue'), Confirmed, Tentative,
+# Rejected and shadow.  Blue boxplots correspond to minimal, average and
+# maximum Z score of a shadow attribute. Red Boruta mass: (to run boruta uncomment)
+# Datasets:
+# BIRADS_multi, T2SI_BIRADS_multi
+# BIRADS_HyperNone_wona, T2SI_HyperNone
+# BIRADS_IntenseorNot_wona, T2SI_IntenseorNot
+# BIRADS_HyperorSlight_wona, T2SI_HyperorSlight
+set.seed(1)
+BIRADS_multiBoruta <- Boruta(BIRADS_multi, T2SI_BIRADS_multi, doTrace = 2, ntree = 1000)
+print(BIRADS_multiBoruta)
+plot(BIRADS_multiBoruta)
+
+set.seed(2)
+BIRADS_HyperNoneBoruta <- Boruta(BIRADS_HyperNone_wona, T2SI_HyperNone, doTrace = 2, ntree = 1000)
+print(BIRADS_HyperNoneBoruta)
+plot(BIRADS_HyperNoneBoruta)
+
+set.seed(3)
+BIRADS_IntenseorNotBoruta <- Boruta(BIRADS_IntenseorNot_wona, T2SI_IntenseorNot, doTrace = 2, ntree = 1000)
+print(BIRADS_IntenseorNotBoruta)
+plot(BIRADS_IntenseorNotBoruta)
+
+set.seed(4)
+BIRADS_HyperorSlightBoruta <- Boruta(BIRADS_HyperorSlight_wona, T2SI_HyperorSlight, doTrace = 2, ntree = 1000)
+print(BIRADS_HyperorSlightBoruta)
+plot(BIRADS_HyperorSlightBoruta)
+
+## Process results and plot Z-scores
+library("caret")
+# for multi class
+confirmedmulti <- BIRADS_multiBoruta$finalDecision[BIRADS_multiBoruta$finalDecision == "Confirmed"]
+tentativemulti <- BIRADS_multiBoruta$finalDecision[BIRADS_multiBoruta$finalDecision == "Tentative"]
+selborutamulti = c(confirmedmulti, tentativemulti)
+print(paste("Selected multi features: ",names(selborutamulti)))
+rankings_multi <- BIRADS_multiBoruta$ImpHistory
+
+# for HyperNone class
+confirmedHyperNone <- BIRADS_HyperNoneBoruta$finalDecision[BIRADS_HyperNoneBoruta$finalDecision == "Confirmed"]
+tentativeHyperNone <- BIRADS_HyperNoneBoruta$finalDecision[BIRADS_HyperNoneBoruta$finalDecision == "Tentative"]
+selborutaHyperNone = c(confirmedHyperNone, tentativeHyperNone)
+print(paste("Selected HyperNone features: ",names(selborutaHyperNone)))
+rankings_HyperNone <- BIRADS_HyperNoneBoruta$ImpHistory
+
+# for IntenseorNot class
+confirmedIntenseorNot <- BIRADS_IntenseorNotBoruta$finalDecision[BIRADS_IntenseorNotBoruta$finalDecision == "Confirmed"]
+tentativeIntenseorNot <- BIRADS_IntenseorNotBoruta$finalDecision[BIRADS_IntenseorNotBoruta$finalDecision == "Tentative"]
+selborutaIntenseorNot = c(confirmedIntenseorNot, tentativeIntenseorNot)
+print(paste("Selected IntenseorNot features: ",names(selborutaIntenseorNot)))
+rankings_IntenseorNot <- BIRADS_IntenseorNotBoruta$ImpHistory
+
+# for HyperorSlight class
+confirmedHyperorSlight <- BIRADS_HyperorSlightBoruta$finalDecision[BIRADS_HyperorSlightBoruta$finalDecision == "Confirmed"]
+tentativeHyperorSlight <- BIRADS_HyperorSlightBoruta$finalDecision[BIRADS_HyperorSlightBoruta$finalDecision == "Tentative"]
+selborutaHyperorSlight = c(confirmedHyperorSlight, tentativeHyperorSlight)
+print(paste("Selected HyperorSlight features: ",names(selborutaHyperorSlight)))
+rankings_HyperorSlight <- BIRADS_HyperorSlightBoruta$ImpHistory
+
+
+# collect
+zscore_selborutamulti = {}
+# proces HyperHypo = 7
+for (i in 1:length(selborutamulti)) {
+    cfeature = names(selborutamulti[i])
+    df = data.frame(zscores = rankings_multi[, cfeature])
+    df$SelectedFeatureGroup = "multiClass"
+    df$selfeat = cfeature
+    zscore_selborutamulti <- rbind(zscore_selborutamulti, df)
+}
+# add shadow mean
+df = data.frame(zscores = rankings_multi[, "shadowMean"])
+df$SelectedFeatureGroup = "multiClass"
+df$selfeat = "multishadowMean"
+zscore_selborutamulti <- rbind(zscore_selborutamulti, df)
+
+# plot for predicting Hyper vs. Hypo
+p <- ggplot(zscore_selborutamulti, aes(factor(selfeat), zscores, fill = factor(SelectedFeatureGroup)))
+p + geom_boxplot() + coord_flip() + labs(title = "most predictive features for multiclass BIRADS T2wSI")
+
+
+# collect
+zscore_selborutaHyperNone = {}
+# proces HyperHypo = 7
+for (i in 1:length(selborutaHyperNone)) {
+    cfeature = names(selborutaHyperNone[i])
+    df = data.frame(zscores = rankings_HyperNone[, cfeature])
+    df$SelectedFeatureGroup = "Hyper.v.s.None"
+    df$selfeat = cfeature
+    zscore_selborutaHyperNone <- rbind(zscore_selborutaHyperNone, df)
+}
+# add shadow mean
+df = data.frame(zscores = rankings_HyperNone[, "shadowMean"])
+df$SelectedFeatureGroup = "Hyper.v.s.None"
+df$selfeat = "HyperNoneshadowMean"
+zscore_selborutaHyperNone <- rbind(zscore_selborutaHyperNone, df)
+
+# plot for predicting HyperNone
+p <- ggplot(zscore_selborutaHyperNone, aes(factor(selfeat), zscores, fill = factor(SelectedFeatureGroup)))
+p + geom_boxplot() + coord_flip() + labs(title = "most predictive features for HyperNone class BIRADS T2wSI")
+
+
+# collect
+zscore_selborutaIntenseorNot = {}
+# proces HyperHypo = 7
+for (i in 1:length(selborutaIntenseorNot)) {
+    cfeature = names(selborutaIntenseorNot[i])
+    df = data.frame(zscores = rankings_IntenseorNot[, cfeature])
+    df$SelectedFeatureGroup = "Intense.v.s.Notseen"
+    df$selfeat = cfeature
+    zscore_selborutaIntenseorNot <- rbind(zscore_selborutaIntenseorNot, df)
+}
+# add shadow mean
+df = data.frame(zscores = rankings_IntenseorNot[, "shadowMean"])
+df$SelectedFeatureGroup = "Intense.v.s.Notseen"
+df$selfeat = "IntenseorNotshadowMean"
+zscore_selborutaIntenseorNot <- rbind(zscore_selborutaIntenseorNot, df)
+
+# plot for predicting Hyper vs. Hypo
+p <- ggplot(zscore_selborutaIntenseorNot, aes(factor(selfeat), zscores, fill = factor(SelectedFeatureGroup)))
+p + geom_boxplot() + coord_flip() + labs(title = "most predictive features for IntenseorNot class BIRADS T2wSI")
+
+
+# collect
+zscore_selborutaHyperorSlight = {}
+# proces HyperHypo = 7
+for (i in 1:length(selborutaHyperorSlight)) {
+    cfeature = names(selborutaHyperorSlight[i])
+    df = data.frame(zscores = rankings_HyperorSlight[, cfeature])
+    df$SelectedFeatureGroup = "Hyper.v.s.slightlyHyper"
+    df$selfeat = cfeature
+    zscore_selborutaHyperorSlight <- rbind(zscore_selborutaHyperorSlight, df)
+}
+# add shadow mean
+df = data.frame(zscores = rankings_HyperorSlight[, "shadowMean"])
+df$SelectedFeatureGroup = "Hyper.v.s.slightlyHyper"
+df$selfeat = "HyperorSlightshadowMean"
+zscore_selborutaHyperorSlight <- rbind(zscore_selborutaHyperorSlight, df)
+
+# plot for predicting Hyper vs. Hypo
+p <- ggplot(zscore_selborutaHyperorSlight, aes(factor(selfeat), zscores, fill = factor(SelectedFeatureGroup)))
+p + geom_boxplot() + coord_flip() + labs(title = "most predictive features for Hyper or Slight class BIRADS T2wSI")
+
+
+#################
+# all together
+zscore_selected = rbind(zscore_selborutamulti, 
+                        zscore_selborutaHyperNone,
+                        zscore_selborutaIntenseorNot,
+                        zscore_selborutaHyperorSlight)
+summary(as.factor(zscore_selected$pass))
+
+p <- ggplot(zscore_selected, aes(factor(selfeat), zscores, fill = factor(SelectedFeatureGroup)))
+p + geom_boxplot() + coord_flip() + labs(title = "most predictive features BIRADS T2wSI by pass")
+
+# descriptive stats
+with(na.omit(allfeatures), do.call(rbind, tapply(LMSIR, find_t2_signal_int, function(x) c(M = mean(x), SD = sd(x)))))
+with(na.omit(allfeatures), do.call(rbind, tapply(T2min_F_r_i, find_t2_signal_int, function(x) c(M = mean(x), SD = sd(x)))))
+with(na.omit(allfeatures), do.call(rbind, tapply(ave_T215, find_t2_signal_int, function(x) c(M = mean(x), SD = sd(x)))))
+with(na.omit(allfeatures), do.call(rbind, tapply(T2texture_energy_nondir, find_t2_signal_int, function(x) c(M = mean(x), SD = sd(x)))))
+
+```
+
+
+```{r}
+save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/T2_featurespred_BIRADS_SI.RData")
+
+```

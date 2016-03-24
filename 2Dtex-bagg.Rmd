@@ -1,7 +1,7 @@
 ---
 title: "3Dtex-bagg"
 author: "Cristina Gallego"
-date: "March 15, 2016"
+date: "March 17, 2016"
 output: 
   html_document: 
     fig_caption: yes
@@ -17,18 +17,13 @@ Bagging trees classification using 2D texture features
 - T2w discrimination ability (added AUC ROC value)
 
 ```{r set-options, cache=FALSE, message=FALSE}
-options(width = 135)
+options(width = 165)
 
 library(caret)
 require(ggplot2)
 library("RSQLite")
-library(klaR)
 library(pROC)
-library("Boruta")
 require(data.table)
-library(R.utils)
-library(rpart)
-library(rpart.plot)
 library(R.utils)
 library(nodeHarvest)
   
@@ -72,8 +67,6 @@ kfcvpartitionsetD <- createFolds(y = 1:length(uniq_cad),## the outcome data are 
                                 k = 10, 
                                 list = TRUE)
 
-
-## using 3Dtexture first + Boosting
 perf_imgT2 = data.frame();  
 perf_allT2 = data.frame();   
 perf_imgT1 = data.frame();  
@@ -84,6 +77,11 @@ imgT2featsel = data.frame()
 allT2featsel = data.frame() 
 imgT1featsel = data.frame() 
 allfeatsel = data.frame() 
+
+cvauc_imgT2 = c()
+cvauc_allT2 = c()
+cvauc_imgT1 = c()
+cvauc_all = c()
 
 # perform k-fold-out
 for(k in 1:10){  # 1:10f cv
@@ -105,9 +103,10 @@ for(k in 1:10){  # 1:10f cv
   T2LMSIR = getid_predLMSIR(LMSIR_lop, T2trainids)
   T2wSI = getid_predT2wSI(perfT2wSI_lop, T2trainids)
   
-  T2train = T2train[,-c(2,5,ncol(T2train))] # exlude orig_label
-  #T2train$find_t2_signal_int = as.factor(T2train$find_t2_signal_int)
-  wpredT2train = cbind(T2train, LMSIR_predicted=T2LMSIR$LMSIR_predicted, T2wSI_predicted=T2wSI$T2wSI_predicted)
+  imgT2train = T2train[,-c(2,5,ncol(T2train))] # exlude orig_label
+  wpredT2train = cbind(T2train[,-c(ncol(T2train))], LMSIR_predicted=T2LMSIR$LMSIR_predicted, T2wSI_predicted=T2wSI$T2wSI_predicted)
+  wpredT2train$find_t2_signal_int = as.factor(wpredT2train$find_t2_signal_int)
+  wpredT2train$T2wSI_predicted = as.factor(wpredT2train$T2wSI_predicted)
   T1train = T1train[,-c(ncol(T1train))]
   
   # remove radiologist based BIRADS category and measured muscle-to-lesion SI 
@@ -116,14 +115,13 @@ for(k in 1:10){  # 1:10f cv
   T1T2wSI = getid_predT2wSI(perfT2wSI_lop, T1T2trainids)
   
   ########## consider differneces
-  T1T2train = T1T2train[,-c(179,182,ncol(T1T2train))]
-  #T1T2train$find_t2_signal_int = as.factor(T1T2train$find_t2_signal_int)
-  ##
-  wpredT1T2train = cbind(T1T2train, LMSIR_predicted=T1T2LMSIR$LMSIR_predicted, T2wSI_predicted=T1T2wSI$T2wSI_predicted)
+  imgT1T2train = T1T2train[,-c(ncol(T1T2train))]
+  wpredT1T2train = cbind(imgT1T2train, LMSIR_predicted=T1T2LMSIR$LMSIR_predicted, T2wSI_predicted=T1T2wSI$T2wSI_predicted)
+  wpredT1T2train$find_t2_signal_int = as.factor(wpredT1T2train$find_t2_signal_int)
   wpredT1T2train$T2wSI_predicted = as.factor(wpredT1T2train$T2wSI_predicted)
   
   # with datasets:   T2train, wpredT2train, T1train, T1T2train, wpredT1T2train
-  selrrfimgT2 = RRF_featsel(T2train, "imgT2")
+  selrrfimgT2 = RRF_featsel(imgT2train, "imgT2")
   selrrfallT2 = RRF_featsel(wpredT2train, "allT2")
   selrrfimgT1 = RRF_featsel(T1train, "imgT1")
   selrrfall = RRF_featsel(wpredT1T2train, "all")
@@ -138,7 +136,7 @@ for(k in 1:10){  # 1:10f cv
   # Define datasets
   ##################
   # define datasets: imgT2wfeatures allT2wfeatures, imgT1wfeatures, allfeatures
-  imgT2features = T2train[,c("lesion_label", selrrfimgT2$selfeat)]
+  imgT2features = imgT2train[,c("lesion_label", selrrfimgT2$selfeat)]
   allT2features = wpredT2train[,c("lesion_label",selrrfallT2$selfeat)]
   imgT1features = T1train[,c("lesion_label",selrrfimgT1$selfeat)]
   allfeatures = wpredT1T2train[, c("lesion_label",selrrfall$selfeat)]
@@ -198,9 +196,11 @@ for(k in 1:10){  # 1:10f cv
                     NC=1-treedata_imgT2$testperf$testpred_NH,
                     pred=ifelse(rules$pred==1,"C","NC"), obs=T2test$lesion_label)
     
+  auc_imgT2 = roc(perfcv_imgT2$obs, perfcv_imgT2$C)
   perf_imgT2 = rbind(perf_imgT2, cbind(dfinfo,perfcv_imgT2) )
-  #print(head(perf_imgT2[,c(4:5,9:12)]))
-    
+  print(head(perfcv_imgT2))
+  cvauc_imgT2 = c(cvauc_imgT2, auc_imgT2$auc)
+ 
   # for treedata_allT2
   rules = data.frame(C=treedata_allT2$testperf$testpred_NH, NC=1-treedata_allT2$testperf$testpred_NH)
   rules$pred = apply(rules, 1, which.max)
@@ -208,8 +208,12 @@ for(k in 1:10){  # 1:10f cv
                     C=treedata_allT2$testperf$testpred_NH,
                     NC=1-treedata_allT2$testperf$testpred_NH,
                     pred=ifelse(rules$pred==1,"C","NC"), obs=T2test$lesion_label)
+  
+  auc_allT2 = roc(perfcv_allT2$obs, perfcv_allT2$C)
   perf_allT2 = rbind(perf_allT2, cbind(dfinfo,perfcv_allT2) )
-  #print(head(perf_allT2[,c(4:5,9:12)]))
+  print(head(perfcv_imgT2))
+  cvauc_allT2 = c(cvauc_allT2, auc_allT2$auc)
+ 
   
   ## for treedata_imgT1
   rules = data.frame(C=treedata_imgT1$testperf$testpred_NH, NC=1-treedata_imgT1$testperf$testpred_NH)
@@ -219,9 +223,10 @@ for(k in 1:10){  # 1:10f cv
                     NC=1-treedata_imgT1$testperf$testpred_NH,
                     pred=ifelse(rules$pred==1,"C","NC"), obs=T1test$lesion_label)
   
-  perf_imgT1 = rbind(perf_imgT1, cbind(dfinfo,perfcv_imgT1) )
-  #print(head(perf_imgT1[,c(4:5,9:12)]))
-  
+  auc_imgT1 = roc(perfcv_imgT1$obs, perfcv_imgT1$C)
+  perf_imgT1 = rbind(perf_imgT1, cbind(dfinfo, perfcv_imgT1) )
+  print(head(perfcv_imgT1))
+  cvauc_imgT1 = c(cvauc_imgT1, auc_imgT1$auc)
   
   # for treedata_all
   rules = data.frame(C=treedata_all$testperf$testpred_NH, NC=1-treedata_all$testperf$testpred_NH)
@@ -231,9 +236,10 @@ for(k in 1:10){  # 1:10f cv
                     NC=1-treedata_all$testperf$testpred_NH,
                     pred=ifelse(rules$pred==1,"C","NC"), obs=T1T2test$lesion_label)
 
-  #print(perf)
+  auc_all = roc(perfcv_all$obs, perfcv_all$C)
   perf_all = rbind(perf_all, cbind(dfinfo,perfcv_all) )
-  #print(head(perf_all[,c(4:5,9:12)]))
+  print(head(perfcv_all))
+  cvauc_all = c(cvauc_all, auc_all$auc)
   
   # AUC
   rocperf_imgT2 = roc(perf_imgT2$obs, perf_imgT2$C)
@@ -276,7 +282,7 @@ for(k in 1:10){  # 1:10f cv
 
     
   # save current state k patient out
-  save.image(paste0("Outputs/NH_addeddiagvalue_3Dtexbagg_cv",k,".RData"))
+  save.image(paste0("Outputs/NH_addeddiagvalue_2Dtexbagg_cv",k,".RData"))
   
 }
 
@@ -287,7 +293,13 @@ plot results
 
 ```{r 3Dtexboost-plots, fig.width=12, fig.height=12, warning=FALSE}
 
+print(summary(cvauc_imgT2))
+print(summary(cvauc_allT2))
+print(summary(cvauc_imgT1))
+print(summary(cvauc_all))
+
 # plot features
+require(ggplot2)
 ## group with all of the features spaces combined, most contributing T2w feature
 ## imgT2featsel ###########
 # pick frequency of 75% or higher as very common feature
@@ -386,7 +398,7 @@ roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), bo
 # find significants: mass allT2 vs all
 roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
 
-
+ 
 ### post training... to find out about a NH prediction in the test set
 # library(nodeHarvest)
 # kid = 10

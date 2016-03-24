@@ -1,7 +1,7 @@
 ---
 title: 'Breast MRI datasets descriptive stats:'
 author: "Cristina Gallego"
-date: "March 14, 2016"
+date: "March 20, 2016"
 output: 
   html_document: 
     fig_caption: yes
@@ -136,8 +136,8 @@ for (k in 1:length(patho)) {
         names(patho[k]), value = "lesion_id", length))
 }
 
-benigns = c(79, 28, 17, 7, 19, 3, 20, 6, 73, 21, 72, 21, 19, 2, 18) # n=405
-maligns = c(79, 3, 151, 21, 1, 2, 1)
+benigns = c(72, 34, 16, 7, 14, 4, 19, 7, 70, 20, 70, 19, 18, 12) # n=382
+maligns = c(80, 3, 136, 21, 1, 1, 2, 1)
 print(sum(benigns))
 print(sum(maligns))
 
@@ -148,6 +148,49 @@ print(sum(maligns))/print(sum(benigns)+sum(maligns))
 
 print(benigns/sum(benigns)*100)
 print(maligns/sum(maligns)*100)
+
+```
+
+Analize type of scans
+==========
+```{r}
+
+seqdf = data.frame()
+caseids = lesioninfo$lesion_id
+for(k in 1:length(caseids)){
+  df = data.frame(id=caseids[k])
+  radreport = imagingdetails[imagingdetails$lesion_id==caseids[k],"original_report_txt"]
+  #cat(radreport)
+  if(grepl("VIBRANT", radreport)){df$T1w="VIBRANT"}else{
+    df$T1w="REVIEW"; 
+    }
+  if(grepl("T2 weighted FSE", radreport)){df$T2w="T2 weighted FSE"}else{
+    df$T2w="REVIEW"; print(caseids[k])
+  }
+  
+  # so far print update
+  print(df)
+  print(lesioninfo[lesioninfo$lesion_id==caseids[k],c(1,3,6:7,13,24:26)])
+  ## find prior histories
+  lesioncomts = lesioninfo[lesioninfo$lesion_id==caseids[k],"proc_lesion_comments_txt"]
+  cat(lesioncomts)
+  surgery=c(" ")
+  if(grepl("mammoplasties", lesioncomts)){surgery = list(c(surgery, "mammoplasties, "))}
+  if(grepl("lumpectomy", lesioncomts)){surgery = list(c(surgery, "lumpectomy, "))}
+  
+  df$surgery = list(c(surgery,lesioncomts))
+  
+  # asppend
+  seqdf = rbind(seqdf, df)
+  
+   ## pause  
+   #   cat ("Press [enter] to continue")
+   #   line <- readline()
+}
+
+
+print(summary(factor(seqdf$T1w)))
+print(summary(factor(seqdf$T2w)))
 
 ```
 

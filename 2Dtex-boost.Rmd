@@ -1,7 +1,7 @@
 ---
 title: "2Dtex-boost"
 author: "Cristina Gallego"
-date: "March 16, 2016"
+date: "March 17, 2016"
 output: 
   html_document: 
     fig_caption: yes
@@ -117,9 +117,10 @@ for(k in 1:10){  # 1:10f cv
   T2LMSIR = getid_predLMSIR(LMSIR_lop, T2trainids)
   T2wSI = getid_predT2wSI(perfT2wSI_lop, T2trainids)
   
-  T2train = T2train[,-c(ncol(T2train))] # exlude orig_label
-  T2train$find_t2_signal_int = as.factor(T2train$find_t2_signal_int)
+  T2train = T2train[,-c(2,5,ncol(T2train))] # exlude orig_label
+  #T2train$find_t2_signal_int = as.factor(T2train$find_t2_signal_int)
   wpredT2train = cbind(T2train, LMSIR_predicted=T2LMSIR$LMSIR_predicted, T2wSI_predicted=T2wSI$T2wSI_predicted)
+  wpredT2train$T2wSI_predicted = as.factor(wpredT2train$T2wSI_predicted)
   T1train = T1train[,-c(ncol(T1train))]
   
   # remove radiologist based BIRADS category and measured muscle-to-lesion SI 
@@ -128,8 +129,8 @@ for(k in 1:10){  # 1:10f cv
   T1T2wSI = getid_predT2wSI(perfT2wSI_lop, T1T2trainids)
   
   ########## consider differneces
-  T1T2train = T1T2train[,-c(ncol(T1T2train))]
-  T1T2train$find_t2_signal_int = as.factor(T1T2train$find_t2_signal_int)
+  T1T2train = T1T2train[,-c(179,182,ncol(T1T2train))]
+  #T1T2train$find_t2_signal_int = as.factor(T1T2train$find_t2_signal_int)
   ##
   wpredT1T2train = cbind(T1T2train, LMSIR_predicted=T1T2LMSIR$LMSIR_predicted, T2wSI_predicted=T1T2wSI$T2wSI_predicted)
   wpredT1T2train$T2wSI_predicted = as.factor(wpredT1T2train$T2wSI_predicted)
@@ -287,7 +288,7 @@ for(k in 1:10){  # 1:10f cv
 
     
   # save current state k patient out
-  save.image(paste0("Outputs/boost_addeddiagvalue_10fcv_2Dtexboost_cv",k,".RData"))
+  save.image(paste0("Outputs/boostonlypred_addedvalue_10fcv_2Dtexboost_cv",k,".RData"))
   
 }
 

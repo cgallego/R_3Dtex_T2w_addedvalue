@@ -88,6 +88,7 @@ read3Dtex_T1uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfo
 }  
 
 read3Dtex_T2uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfolds, kparti) {
+  library("RSQLite")
   sqlite <- dbDriver("SQLite")
   conn <- dbConnect(sqlite, "textureUpdatedFeatures.db")
   
@@ -168,6 +169,7 @@ read3Dtex_T2uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfo
 }  
 
 read3Dtex_T1T2uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfolds, kparti) {
+  library("RSQLite")
   sqlite <- dbDriver("SQLite")
   conn <- dbConnect(sqlite, "textureUpdatedFeatures.db")
   
@@ -254,6 +256,283 @@ read3Dtex_T1T2uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cv
   output <- list(features, features_heldout, namest1w, namest2w, lesioninfo_train, lesioninfo_heldout)
   return(output)
 }  
+
+feature_dictionary<- function(features){
+  
+  # create dictionary (34 dynamic features (inside=in) and from (contour=rim))
+  dict_dyn = data.frame(f="A_inside", nname="Uptake(in) curve amplitude", stringsAsFactors = FALSE)
+  dict_dyn = rbind(dict_dyn, c("alpha_inside","Rate of signal increase(in)" ))   
+  dict_dyn = rbind(dict_dyn, c("beta_inside","Rate of signal decrease(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("iAUC1_inside","Area Under Uptake curve(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("Slope_ini_inside","Initial Uptake slope(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("Tpeak_inside","Time-to-peak(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("Kpeak_inside","Curvature at Time-to-peak(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("SER_inside","SER(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("maxCr_inside","max relative signal enhancement(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("peakCr_inside","time to Max relative signal enhancement(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("UptakeRate_inside","Uptake rate(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("washoutRate_inside","Washout rate(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("maxVr_inside","Max spatial variance of enhancement(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("peakVr_inside","time to Max spatial variance of enhancement(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("Vr_increasingRate_inside","enhancement-variance increasing rate(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("Vr_decreasingRate_inside","enhancement-variance decreasing rate(in)" ))  
+  dict_dyn = rbind(dict_dyn, c("Vr_post_1_inside","enhancement-variance at first time-point(in)" ))  
+  
+  # for contour or rim
+  dict_dyn = rbind(dict_dyn, c("A_countor", "Uptake(rim) curve amplitude") )
+  dict_dyn = rbind(dict_dyn, c("alpha_countor","Rate of signal increase(rim)" ))   
+  dict_dyn = rbind(dict_dyn, c("beta_countor","Rate of signal decrease(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("iAUC1_countor","Area Under Uptake curve(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("Slope_ini_countor","Initial Uptake slope(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("Tpeak_countor","Time-to-peak(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("Kpeak_countor","Curvature at Time-to-peak(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("SER_countor","SER(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("maxCr_countor","max relative signal enhancement(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("peakCr_countor","time to Max relative signal enhancement(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("UptakeRate_countor","Uptake rate(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("washoutRate_countor","Washout rate(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("maxVr_countor","Max spatial variance of enhancement(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("peakVr_countor","time to Max spatial variance of enhancement(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("Vr_increasingRate_countor","enhancement-variance increasing rate(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("Vr_decreasingRate_countor","enhancement-variance decreasing rate(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("Vr_post_1_countor","enhancement-variance at first time-point(rim)" ))  
+  dict_dyn = rbind(dict_dyn, c("min_F_r_i","min uptake" ))  
+  dict_dyn = rbind(dict_dyn, c("max_F_r_i","max uptake" ))  
+  dict_dyn = rbind(dict_dyn, c("mean_F_r_i","uptake average" ))  
+  dict_dyn = rbind(dict_dyn, c("var_F_r_i","uptake variance" ))  
+  dict_dyn = rbind(dict_dyn, c("skew_F_r_i","uptake skewness" ))  
+  dict_dyn = rbind(dict_dyn, c("kurt_F_r_i","uptake kurtosis" )) 
+  dict_dyn$type = "T1wdynamic"
+  
+  # for morphology
+  dict_mor = data.frame(f="ivVariance", nname="Variance of spatial Margin Gradient",  stringsAsFactors = FALSE)
+  dict_mor = rbind(dict_mor, c("iMax_Variance_uptake", "max Variance of spatial Margin Gradient"))
+  dict_mor = rbind(dict_mor, c("iiMin_change_Variance_uptake","change in Variance of spatial Margin Gradient" )) 
+  dict_mor = rbind(dict_mor, c("iiiMax_Margin_Gradient","Max Margin Gradient" )) 
+  dict_mor = rbind(dict_mor, c("k_Max_Margin_Grad","time to Max Margin Gradient" )) 
+  dict_mor = rbind(dict_mor, c("circularity","circularity" )) 
+  dict_mor = rbind(dict_mor, c("irregularity","irregularity" )) 
+  dict_mor = rbind(dict_mor, c("irregularity","irregularity" )) 
+  dict_mor = rbind(dict_mor, c("edge_sharp_mean","mean 3D Sharpness of lesion margin " )) 
+  dict_mor = rbind(dict_mor, c("edge_sharp_std","std 3D Sharpness of lesion margin " )) 
+  dict_mor = rbind(dict_mor, c("max_RGH_mean","max Radial gradient" )) 
+  dict_mor = rbind(dict_mor, c("max_RGH_mean_k","Time to max Radial gradient" )) 
+  dict_mor = rbind(dict_mor, c("max_RGH_var","Max Radial gradient variance" )) 
+  dict_mor = rbind(dict_mor, c("max_RGH_var_k","Time to max variance Radial gradient" )) 
+  dict_mor$type = "T1wmorphology"
+  
+  # for T1w texture
+  dict_tex = data.frame(f="texture_energy_nondir_post1", nname="Energy ptime1",  stringsAsFactors = FALSE)
+  dict_tex = rbind(dict_tex, c("texture_contrast_nondir_post1", "Contrast ptime1"))
+  dict_tex = rbind(dict_tex, c("texture_correlation_nondir_post1","Correlation ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_variance_nondir_post1","Variance ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_inversediffmoment_nondir_post1","Inverse difference moment ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumaverage_nondir_post1","Sum average ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumvariance_nondir_post1","Sum variance ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumentropy_nondir_post1","Sum Entropy ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_entropy_nondir_post1","Entropy ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffvariance_nondir_post1","Difference variance ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffentropy_nondir_post1","Difference entropy ptime1" )) 
+  dict_tex = rbind(dict_tex, c("texture_energy_nondir_post2","Energy ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_contrast_nondir_post2", "Contrast ptime2"))
+  dict_tex = rbind(dict_tex, c("texture_correlation_nondir_post2","Correlation ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_variance_nondir_post2","Variance ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_inversediffmoment_nondir_post2","Inverse difference moment ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumaverage_nondir_post2","Sum average ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumvariance_nondir_post2","Sum variance ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumentropy_nondir_post2","Sum Entropy ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_entropy_nondir_post2","Entropy ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffvariance_nondir_post2","Difference variance ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffentropy_nondir_post2","Difference entropy ptime2" )) 
+  dict_tex = rbind(dict_tex, c("texture_energy_nondir_post3","Energy ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_contrast_nondir_post3", "Contrast ptime3"))
+  dict_tex = rbind(dict_tex, c("texture_correlation_nondir_post3","Correlation ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_variance_nondir_post3","Variance ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_inversediffmoment_nondir_post3","Inverse difference moment ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumaverage_nondir_post3","Sum average ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumvariance_nondir_post3","Sum variance ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumentropy_nondir_post3","Sum Entropy ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_entropy_nondir_post3","Entropy ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffvariance_nondir_post3","Difference variance ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffentropy_nondir_post3","Difference entropy ptime3" )) 
+  dict_tex = rbind(dict_tex, c("texture_energy_nondir_post4","Energy ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_contrast_nondir_post4", "Contrast ptime4"))
+  dict_tex = rbind(dict_tex, c("texture_correlation_nondir_post4","Correlation ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_variance_nondir_post4","Variance ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_inversediffmoment_nondir_post4","Inverse difference moment ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumaverage_nondir_post4","Sum average ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumvariance_nondir_post4","Sum variance ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_sumentropy_nondir_post4","Sum Entropy ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_entropy_nondir_post4","Entropy ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffvariance_nondir_post4","Difference variance ptime4" )) 
+  dict_tex = rbind(dict_tex, c("texture_diffentropy_nondir_post4","Difference entropy ptime4" )) 
+  dict_tex$type = "T1wtexture"
+  
+  # for dispersion
+  dict_dis = data.frame(f="V0", nname="dispersion s0",  stringsAsFactors = FALSE)
+  dict_dis = rbind(dict_dis, c("V1","dispersion s1" )) 
+  dict_dis = rbind(dict_dis, c("V2","dispersion s2" )) 
+  dict_dis = rbind(dict_dis, c("V3","dispersion s3" )) 
+  dict_dis = rbind(dict_dis, c("V4","dispersion s4" )) 
+  dict_dis = rbind(dict_dis, c("V5","dispersion s5" )) 
+  dict_dis = rbind(dict_dis, c("V6","dispersion s6" )) 
+  dict_dis = rbind(dict_dis, c("V7","dispersion s7" )) 
+  dict_dis = rbind(dict_dis, c("V8","dispersion s8" )) 
+  dict_dis = rbind(dict_dis, c("V9","dispersion s9" )) 
+  dict_dis = rbind(dict_dis, c("V10","dispersion s10" )) 
+  dict_dis = rbind(dict_dis, c("V11","dispersion s11" )) 
+  dict_dis = rbind(dict_dis, c("V12","dispersion s12" )) 
+  dict_dis = rbind(dict_dis, c("V13","dispersion s13" )) 
+  dict_dis = rbind(dict_dis, c("V14","dispersion s14" )) 
+  dict_dis = rbind(dict_dis, c("V15","dispersion s15" )) 
+  dict_dis = rbind(dict_dis, c("V16","dispersion s16" )) 
+  dict_dis = rbind(dict_dis, c("V17","dispersion s17" )) 
+  dict_dis = rbind(dict_dis, c("V18","dispersion s18" )) 
+  dict_dis = rbind(dict_dis, c("V19","dispersion s19" )) 
+  dict_dis$type = "dispersion"
+  
+  # for single enhancement time point samples
+  dict_timenh = data.frame(f="earlySE0", nname="1st post-SE s0",  stringsAsFactors = FALSE)
+  dict_timenh = rbind(dict_timenh, c("earlySE1","1st post-SE s1" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE2","1st post-SE s2" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE3","1st post-SE s3" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE4","1st post-SE s4" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE5","1st post-SE s5" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE6","1st post-SE s6" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE7","1st post-SE s7" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE8","1st post-SE s8" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE9","1st post-SE s9" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE10","1st post-SE s10" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE11","1st post-SE s11" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE12","1st post-SE s12" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE13","1st post-SE s13" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE14","1st post-SE s14" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE15","1st post-SE s15" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE16","1st post-SE s16" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE17","1st post-SE s17" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE18","1st post-SE s18" )) 
+  dict_timenh = rbind(dict_timenh, c("earlySE19","1st post-SE s19" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE0","2nd post-SE s0" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE1","2nd post-SE s1" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE2","2nd post-SE s2" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE3","2nd post-SE s3" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE4","2nd post-SE s4" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE5","2nd post-SE s5" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE6","2nd post-SE s6" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE7","2nd post-SE s7" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE8","2nd post-SE s8" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE9","2nd post-SE s9" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE10","2nd post-SE s10" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE11","2nd post-SE s11" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE12","2nd post-SE s12" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE13","2nd post-SE s13" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE14","2nd post-SE s14" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE15","2nd post-SE s15" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE16","2nd post-SE s16" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE17","2nd post-SE s17" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE18","2nd post-SE s18" )) 
+  dict_timenh = rbind(dict_timenh, c("dce2SE19","2nd post-SE s19" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE0","3rd post-SE s0" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE1","3rd post-SE s1" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE2","3rd post-SE s2" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE3","3rd post-SE s3" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE4","3rd post-SE s4" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE5","3rd post-SE s5" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE6","3rd post-SE s6" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE7","3rd post-SE s7" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE8","3rd post-SE s8" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE9","3rd post-SE s9" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE10","3rd post-SE s10" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE11","3rd post-SE s11" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE12","3rd post-SE s12" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE13","3rd post-SE s13" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE14","3rd post-SE s14" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE15","3rd post-SE s15" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE16","3rd post-SE s16" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE17","3rd post-SE s17" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE18","3rd post-SE s18" )) 
+  dict_timenh = rbind(dict_timenh, c("dce3SE19","3rd post-SE s19" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE0","last post-SE s0" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE1","last post-SE s1" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE2","last post-SE s2" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE3","last post-SE s3" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE4","last post-SE s4" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE5","last post-SE s5" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE6","last post-SE s6" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE7","last post-SE s7" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE8","last post-SE s8" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE9","last post-SE s9" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE10","last post-SE s10" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE11","last post-SE s11" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE12","last post-SE s12" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE13","last post-SE s13" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE14","last post-SE s14" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE15","last post-SE s15" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE16","last post-SE s16" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE17","last post-SE s17" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE18","last post-SE s18" )) 
+  dict_timenh = rbind(dict_timenh, c("lateSE19","last post-SE s19" )) 
+  dict_timenh$type = "single-time-Enh"
+  
+  # create dictionaries ( T2 )
+  dict_T2w = data.frame(f="find_t2_signal_int", nname="BIRADS T2w SI cat",  stringsAsFactors = FALSE)
+  dict_T2w = rbind(dict_T2w, c("T2_lesionSI","T2w mean SI" )) 
+  dict_T2w = rbind(dict_T2w, c("T2_lesionSIstd","T2w std SI" )) 
+  dict_T2w = rbind(dict_T2w, c("LMSIR","measured LMSIR" )) 
+  dict_T2w = rbind(dict_T2w, c("T2min_F_r_i","min T2w SI" )) 
+  dict_T2w = rbind(dict_T2w, c("T2max_F_r_i","max T2w SI" )) 
+  dict_T2w = rbind(dict_T2w, c("T2mean_F_r_i","mean T2w SI" )) 
+  dict_T2w = rbind(dict_T2w, c("T2var_F_r_i","variance T2w SI" )) 
+  dict_T2w = rbind(dict_T2w, c("T2skew_F_r_i","skewness T2w SI" )) 
+  dict_T2w = rbind(dict_T2w, c("T2kurt_F_r_i","kurtosis T2w SI" )) 
+  dict_T2w = rbind(dict_T2w, c("T2grad_margin","T2w margin gradient" ))
+  dict_T2w = rbind(dict_T2w, c("T2grad_margin_var","T2w margin gradient variance" )) 
+  dict_T2w = rbind(dict_T2w, c("T2RGH_mean","T2w average radial gradient" )) 
+  dict_T2w = rbind(dict_T2w, c("T2RGH_var","T2w radial gradient variance" )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_energy_nondir","T2w Energy " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_contrast_nondir", "T2w Contrast "))
+  dict_T2w = rbind(dict_T2w, c("T2texture_correlation_nondir","T2w Correlation " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_variance_nondir","T2w Variance " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_inversediffmoment_nondir","T2w Inverse difference moment " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_sumaverage_nondir","T2w Sum average " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_sumvariance_nondir","T2w Sum variance " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_sumentropy_nondir","T2w Sum Entropy " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_entropy_nondir","T2w Entropy " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_diffvariance_nondir","T2w Difference variance " )) 
+  dict_T2w = rbind(dict_T2w, c("T2texture_diffentropy_nondir","T2w Difference entropy " )) 
+  ## add predictive features
+  dict_T2w = rbind(dict_T2w, c("LMSIR_predicted","predicted LMSIR" )) 
+  dict_T2w = rbind(dict_T2w, c("T2wSI_predicted","predicted BIRADS T2w SI cat" )) 
+  dict_T2w$type = "T2w"
+  
+  alldicts = list(dict_dyn, dict_mor, dict_tex, dict_dis, dict_timenh, dict_T2w)
+  
+  library(RColorBrewer) # hist(discoveries, col = colors)
+  n=length(alldicts) 
+  colors <- brewer.pal(n, "Dark2")
+  
+  # based on number of dictionaries asign colors
+  for(k in 1:n){
+    alldicts[[k]]$color = colors[k]
+  }
+  
+  # translated names of features
+  namesf = colnames(features)
+  fnnames = data.frame()
+  for(k in 2:ncol(features)){
+    for(d in 1:length(alldicts)){
+      if(namesf[k] %in% alldicts[[d]]$f){
+        namentype = alldicts[[d]][namesf[k] == alldicts[[d]]$f,]
+        fnnames = rbind(fnnames, namentype )
+        print(namentype$nname)
+        break;
+      }
+    }
+  }
+  output = list(alldicts=alldicts, fnnames=fnnames)
+  
+  return(output)
+}
 
 
 ################ 
@@ -346,6 +625,7 @@ read2Dtex_T1uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfo
 }  
 
 read2Dtex_T2uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfolds, kparti) {
+  library("RSQLite")
   sqlite <- dbDriver("SQLite")
   conn <- dbConnect(sqlite, "stage1T2updatedFeatures.db")
   
@@ -426,6 +706,7 @@ read2Dtex_T2uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfo
 }  
 
 read2Dtex_T1T2uniqcad_parti <- function(id_cad_pts, uniq_cad, partitionsetDi, cvfolds, kparti) {
+  library("RSQLite")
   sqlite <- dbDriver("SQLite")
   conn <- dbConnect(sqlite, "stage1T2updatedFeatures.db")
   
@@ -526,9 +807,9 @@ bestparams_boosting_class <- function(features, TestsetD, ntrees, maxD){
   
   ###################################################
   # create grid of evaluation points
-  gntrees = c(50,100,250,350)
-  gminsplit = c(3,1) 
-  gcp = c(0.01,-1) 
+  gntrees = c(50,100,250,350,500)
+  gminsplit = c(3,1,0) 
+  gcp = c(-1) 
   grd <- expand.grid(ntrees=gntrees, minsplit = gminsplit, cp = gcp)
   
   # for oneshot
@@ -736,12 +1017,13 @@ subset_feature_selection <- function(allfeatures){
 ################ 
 ## Calculate and plot an ROC with CI and optimal threshold
 ################ 
-calcAUC_plot <- function(obs, probpred, xptext, yptext, icolors, atitle){
+calcAUC_plot <- function(obs, probpred, xptext, yptext, ltype, icolors, atitle){
   library(pROC)
+  
   ROC <- plot.roc(obs, 
                   probpred,
                   ci=TRUE, print.auc=TRUE, print.auc.x=xptext, print.auc.y=yptext,
-                  col=icolors, lty=1, legacy.axes=TRUE,
+                  col=icolors, lty=ltype, legacy.axes=TRUE, # lty= # Line type: 0=blank, 1=solid, 2=dashed, 3=dotted, 4=dotdash, 5=longdash, 6=twodash  
                   main=atitle)
   # determine best operating point (maximizes both Se Spe)
   # “best”: the threshold with the highest sum sensitivity + specificity is plotted (this might be more than one threshold).
@@ -1086,6 +1368,7 @@ boruta_featsel <- function(featTrain, type){
   ################ 
   ## Subset feature selection via permutation tests feature relevance (Boruta)
   ################ 
+  library(Boruta)
   # Color codes: c('green', 'yellow', 'red', 'blue'), Confirmed, Tentative,
   # Rejected and shadow.  Blue boxplots correspond to minimal, average and
   set.seed(1)
@@ -1141,6 +1424,7 @@ RRF_featsel <- function(featTrain, type){
 ### code boosting forest Train: 
 ### parameters, T= # of trees, D= tree depth, dat
 rpart_boostforestTrain <- function(ntrees, maxD, zcp, TrainsetD) {
+  library(adabag)
   # set control
   fitparm = rpart.control(maxdepth = maxD,  minsplit = 2, cp = zcp)
   
@@ -1161,6 +1445,7 @@ rpart_boostforestTrain <- function(ntrees, maxD, zcp, TrainsetD) {
 ### code boosting forest Test: 
 ### parameters, T= # of trees, forest, TrainsetD, TestsetD
 rpart_boostforestTest <- function(ntrees, TrainsetD, TestsetD, boostrees) {
+  library(adabag)
   
   trainpred = predict.boosting(boostrees, newdata = TrainsetD) 
   #print(trainpred$confusion)
@@ -1212,7 +1497,7 @@ rpart_boostforestTest <- function(ntrees, TrainsetD, TestsetD, boostrees) {
 ### parameters, T= # of trees, forest, TrainsetD, TestsetD
 ###################################################
 rpart_cascadeTest <- function(T, testc, predvar, forest){ 
-  
+  library(pROC)
   fclasspo=list()
   for (t in 1:T){
     # Calcultate posterior Probabilities on grid points
@@ -1257,13 +1542,11 @@ rpart_cascadeTest <- function(T, testc, predvar, forest){
 
 
 ###################################################
-### code forest Train: 
+### code nodeHarvest Train: 
 ### parameters, T= # of trees, D= tree depth, dat
 ###################################################
-
 # Build a nodeHarvest
 NH_looforestTrain <- function(TrainsetD, TestsetD) {
-  library(klaR)
   library(nodeHarvest)
   
   # to eval
@@ -1279,9 +1562,8 @@ NH_looforestTrain <- function(TrainsetD, TestsetD) {
   ###################################################
   # create grid of evaluation points
   gmaxinter = c(1,2,3,5) 
-  gnodes = c(25,50,100,150,200,250,400)
-  gnodesize = c(5,3,1)
-  grd <- expand.grid(maxinter = gmaxinter, nodes = gnodes, nodesize=gnodesize)
+  gnodesize = c(25,20,15,10,5)
+  grd <- expand.grid(maxinter = gmaxinter, nodesize = gnodesize)
   
   # for oneshot
   grdperf = data.frame(grd)
@@ -1290,18 +1572,17 @@ NH_looforestTrain <- function(TrainsetD, TestsetD) {
   
   M = list()
   for(k in 1:nrow(grd)){
-    Nnodes=grd$nodes[k]
     maxinter=grd$maxinter[k]
     nodesize=grd$nodesize[k]
     
     # Build in 
-    cat("nodes : " ,Nnodes, "maxinter: ", maxinter, "nodesize: ", nodesize, "\n")
+    cat("maxinter: ", maxinter, "nodesize: ", nodesize, "\n")
     
-    nodeHarvestfit =  nodeHarvest(TrainsetD[,2:ncol(TrainsetD)], ifelse(TrainsetD[,1]=="C",1,0),
+    nodeHarvestfit =  nodeHarvest(TrainsetD[,2:ncol(TrainsetD)], ifelse(TrainsetD$lesion_label=="C",1,0),
                               maxinter=maxinter,
-                              nodes=Nnodes, 
+                              nodes=500, 
                               mode = "outbag",
-                              silent=TRUE, biascorr=FALSE)
+                              silent=TRUE, biascorr=TRUE)
     # collect results
     # for TrainsetD
     predTrainset = TrainsetD[,c(2:ncol(TrainsetD))]
@@ -1316,7 +1597,7 @@ NH_looforestTrain <- function(TrainsetD, TestsetD) {
     print(grdperf[k,])
     
     # append perfm for ROC
-    M = append(M, list(M=list(nodes=Nnodes,maxinter=maxinter,
+    M = append(M, list(M=list(nodesize=nodesize,maxinter=maxinter,
                               trainperf=trainperf,
                               testperf=testperf,
                               forest=nodeHarvestfit)))
@@ -1332,4 +1613,150 @@ NH_looforestTrain <- function(TrainsetD, TestsetD) {
   
   return(bestunedNH)
 }
+
+adjustweights_NH <- function(bestunedNH, TrainsetD, TestsetD) {
+  library(nodeHarvest)
+  totalnodes = length(bestunedNH[["nodes"]])-1
+  print(paste0("Total number of nodes to adjust: ",totalnodes))
+  # reset weights to test one by one
+  for(k in 1:totalnodes){
+    attr(bestunedNH[["nodes"]][[k]], "weight") = 0
+  }
+  
+  predTestset = TestsetD[,names(TrainsetD[c(2:ncol(TrainsetD))])]
+  labelsTest = ifelse(TestsetD$lesion_label=="C",1,0)
+  
+  confNodes = c()
+  for(k in 1:totalnodes){
+    attr(bestunedNH[["nodes"]][[k]], "weight") = 1
+    if(k>1){
+      attr(bestunedNH[["nodes"]][[k-1]], "weight") = 0
+    }
+    
+    # predict only with that node weighted = 1
+    pred=predict(bestunedNH,
+                 newdata=predTestset, explain=1, maxshow = 1)
+    
+    confNode = sum(na.omit(abs(labelsTest-pred)<=0.5))/length(na.omit(abs(labelsTest-pred)<=0.5))
+    #print(confNode)
+    confNodes = c(confNodes, confNode)
+  }
+  
+  confNodes = c(confNodes, attr(bestunedNH[["nodes"]][[totalnodes+1]], "weight"))
+  
+  for(k in 1:totalnodes){
+    attr(bestunedNH[["nodes"]][[k]], "weight") = confNodes[k]
+  }
+  
+  # predict only with that node weighted = 1
+  predTest=predict(bestunedNH,
+                   newdata=predTestset, explain=NULL, maxshow = 1)
+  
+  rules = data.frame(C=predTest, NC=1-predTest)
+  rules$pred = apply(rules, 1, which.max)
+  perf_all = data.frame(C=predTest, NC=1-predTest,
+                        pred=ifelse(rules$pred==1,"C","NC"), obs=TestsetD$lesion_label)
+  rocperf_all = roc(perf_all$obs, perf_all$C)
+  print(rocperf_all)
+  
+  NHadjusted = list()
+  NHadjusted$forest = bestunedNH
+  NHadjusted$testperf$testpred_NH = predTest
+  
+  return(NHadjusted)
+  
+}
+
+
+###################################################
+# Build a nodeHarvest with internal cv of parameters
+###################################################
+NH_looforestTrain_wcv <- function(TrainsetD, TestsetD, gmaxinter) {
+  library(pROC)
+  library(nodeHarvest)
+  # sample 90% for training and 10% for parameter selection
+  sv = sample(1:nrow(TrainsetD), 0.9*nrow(TrainsetD), replace = FALSE)
+  
+  # split into training and validation
+  training = TrainsetD[sv,]
+  validation = TrainsetD[-sv,]
+  
+  # to eval
+  test_roc <- function(model, testdata, testlabels) {
+    # create call
+    testpred_NH <- predict(model, newdata=testdata)
+    roc_obj <- roc(testlabels, testpred_NH)
+    output <- list(auc=roc_obj$auc, ci=ci(roc_obj), testpred_NH=testpred_NH)
+    return(output)
+  }
+  
+  # train
+  ###################################################
+  # create grid of evaluation points
+  #gmaxinter = c(1,2,3) 
+  gnodesize = c(25,20,15,10,5)
+  grd <- expand.grid(maxinter = gmaxinter, nodesize = gnodesize)
+  
+  # for oneshot
+  grdperf = data.frame(grd)
+  grdperf$rocTrain =0
+  grdperf$rocValid =0
+  grdperf$rocTest =0
+  
+  M = list()
+  validation = rbind(TestsetD[,names(TrainsetD)], validation)
+  
+  for(k in 1:nrow(grd)){
+    maxinter=grd$maxinter[k]
+    nodesize=grd$nodesize[k]
+    
+    # Build in 
+    cat("maxinter: ", maxinter, "nodesize: ", nodesize, "\n")
+    
+    nodeHarvestfit =  nodeHarvest(TrainsetD[,2:ncol(TrainsetD)], ifelse(TrainsetD$lesion_label=="C",1,0),
+                                  maxinter=maxinter,
+                                  nodes=500, 
+                                  mode = "outbag",
+                                  silent=TRUE, biascorr=FALSE)
+    # collect results
+    # for TrainsetD
+    predTrainset = TrainsetD[,c(2:ncol(TrainsetD))]
+    trainperf <- test_roc(nodeHarvestfit, predTrainset, TrainsetD$lesion_label)
+    validperf <- test_roc(nodeHarvestfit, 
+                          validation[1:nrow(TestsetD),c(2:ncol(validation))], 
+                          validation$lesion_label[1:nrow(TestsetD)])
+    testperf <- test_roc(nodeHarvestfit, validation[,c(2:ncol(validation))], validation$lesion_label)
+    testperf$labelstest = validation$lesion_label
+    testperf$ids = c(rownames(validation))
+    
+    # for ROC
+    grdperf$rocTrain[k] <- trainperf$auc
+    grdperf$rocValid[k] <- validperf$auc
+    grdperf$rocTest[k] <- testperf$auc
+    print(grdperf[k,])
+    
+    # append perfm for ROC
+    M = append(M, list(M=list(nodesize=nodesize,maxinter=maxinter,
+                              trainperf=trainperf,
+                              testperf=testperf,
+                              validperf=validperf,
+                              forest=nodeHarvestfit)))
+  }
+  
+  print(grdperf)
+  index = which(grdperf$rocTest == max(grdperf$rocTest), arr.ind=TRUE)
+  print(grdperf[index,])
+  bestunedNH = M[index]$M
+  
+  predTestset = TestsetD[,names(TrainsetD[c(2:ncol(TrainsetD))])]
+  plot(bestunedNH$forest, XTEST=predTestset[1,], 
+       highlight=1, labels="", cexfaclab=1)
+  
+  predict(bestunedNH$forest, newdata=predTestset[1,], explain=1, maxshow=500)
+  
+  
+  return(bestunedNH)
+}
+
+
 

@@ -1,0 +1,142 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+ 
+Final regression-based predictor model of LMSIR:
+=============================
+- This code creates a regression based predictor of LMSIR and add them to the pool of 55 T2w features for a total of 57 T2w featues
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width =125)
+
+library(caret)
+require(ggplot2)
+library("RSQLite")
+library(gbm)
+
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR")
+source('C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/functions.R')
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/allpartitionsetD")
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR/Rdata/T2_featurespred_LMSIR.RData")
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR/Rdata/regressorsLMSIR_T2w.RData")
+# to locate selected features by boruta for LMSIR: ordered_zscores
+# to locate selected features by RRF for LMSIR: allLMSIRfeatures
+
+```
+
+```{r fig.width=12, fig.height=12, warning=FALSE}
+# read datasets
+npatients = length(uniq_cad)
+allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 2)
+    
+## formant
+allfeatures = rbind(allf[[1]], allf[[2]])
+alllesioninfo = rbind(allf[[5]], allf[[6]])
+
+### print number of total lesions 
+# before was ##   C / NC = 140 / 132
+print(summary(as.factor(allfeatures$orig_label)))
+
+#######################
+# format datasets with find_T2_signal_int as response variable
+LMSIRt2_signal = na.omit(cbind(allfeatures["LMSIR"], allfeatures[,2:ncol(allfeatures)]))
+
+LMSIRt2_signal = LMSIRt2_signal[-c(202,ncol(LMSIRt2_signal))]
+summary(LMSIRt2_signal$LMSIR)
+
+#######################
+# Subset previuosly selected features
+# for Boruta and rrfset and combine
+borutasel = unique(ordered_zscores[,2])
+rrfsel = as.character(unique(allLMSIRfeatures[,1]))
+LMSIR_featsel = unique(borutasel, rrfsel)
+
+```
+
+
+Build final regressor
+=======
+```{r}
+
+# collect parameters for bestuned LMSIR regressor
+print(bestune)
+ntrees = bestune$y
+alpha = bestune$z
+npatients = length(uniq_cad)
+LMSIR_lop = data.frame()
+
+# perform leave-one-patient-out LMSIR prediction
+for(k in 1:npatients){
+  
+  ## Create folds leave-one-patient-out
+  allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, k)
+    
+  ## formant
+  Trainset = allf[[1]]; Trainsetinfo = allf[[5]]
+  Testset = allf[[2]]; Testsetinfo = allf[[6]]
+  dfinfo = Testsetinfo[,c(1,3,6:7,24:26)]
+  testids = Testsetinfo$lesion_id
+  print(dfinfo)
+
+  ### print number of total lesions 
+  # before was ##   C / NC = 140 / 132
+  print(summary(as.factor(Trainset$orig_label)))
+  Trainset = Trainset[,-ncol(Trainset)]
+  Trainset$find_t2_signal_int = as.factor(Trainset$find_t2_signal_int)
+  Testset$find_t2_signal_int = as.factor(Testset$find_t2_signal_int)
+  
+  # train boosted gradient trees 
+  LMSIRboost = gbm(LMSIR ~ . ,data=Trainset, 
+                   distribution="gaussian", 
+                   n.trees=ntrees, shrinkage=alpha, verbose=FALSE)
+  # on training
+  LMSIRboost.hattrain = predict(LMSIRboost, newdata=Trainset, n.trees=ntrees) 
+  #plot(LMSIRboost.hattrain, Trainset$LMSIR)
+  #abline (0,1) 
+  MSEtrainboost = mean((LMSIRboost.hattrain - Trainset$LMSIR)^2)
+  sqrtMSEtrainboost = sqrt(MSEtrainboost)
+  print(paste0("mean boost.sMSEtrain = ", sqrtMSEtrainboost))
+
+  # on testing
+  LMSIRboost.hattest = predict(LMSIRboost, newdata=Testset, n.trees=ntrees)   
+  #plot(LMSIRboost.hattest, LMSIR.test)
+  #abline (0,1) 
+  MSEtestboost = (LMSIRboost.hattest - Testset$LMSIR)^2
+  sqrtMSEtestboost = sqrt(MSEtestboost)
+  print(paste0("boost.sMSEtest = ", sqrtMSEtestboost))
+
+  # collect data for each patient into LMSIR_lop
+  df = data.frame(LMSIR_measured = Testset$LMSIR, LMSIR_predicted = LMSIRboost.hattest, 
+                  mean_sqrtMSEtrain=sqrtMSEtrainboost, sqrtMSEtest=sqrtMSEtestboost)
+  LMSIR_lop = rbind(LMSIR_lop, cbind(dfinfo, df))
+}
+
+
+# plot ovearall
+p1 <- ggplot(data=LMSIR_lop, aes(x=LMSIR_measured, y=LMSIR_predicted)) 
+p1 + geom_point(aes(colour=sqrtMSEtest)) + geom_abline(intercept = 0, slope = 1) + 
+  #scale_y_continuous(limits = c(min(LMSIR_lop$sqrtMSEtest),max(LMSIR_lop$sqrtMSEtest))) +
+  scale_colour_continuous(limits = c(min(LMSIR_lop$sqrtMSEtest),max(LMSIR_lop$sqrtMSEtest))) +
+  theme_bw(base_size = 14, base_family = "") 
+
+print("Stats for MSE in trainingset acroos lop-out validations = ")
+summary(LMSIR_lop$mean_sqrtMSEtrain)
+
+print("Stats for MSE in testset acroos lop-out validations = ")
+summary(LMSIR_lop$sqrtMSEtest)
+
+## correlation coefficient
+cor(LMSIR_lop$LMSIR_measured, LMSIR_lop$LMSIR_predicted)          # apply the cor function 
+
+```
+
+
+
+```{r}
+
+save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR/Rdata/finalregressorsLMSIR_T2w.RData")
+
+```
+

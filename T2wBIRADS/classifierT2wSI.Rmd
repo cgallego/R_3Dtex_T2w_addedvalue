@@ -1,0 +1,911 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+
+Predictor model of BIRADS T2w SI:
+=============================
+- This code creates a classifier based predictor of BIRADS T2w SI and add them to the pool of 55 T2w features for a total of 57 T2w featues
+
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width =95)
+
+library(caret)
+require(ggplot2)
+library("RSQLite")
+library(klaR)
+
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS")
+source('C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/functions.R')
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/allpartitionsetD")
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/T2_featurespred_BIRADS_SI.Rdata")
+# to locate selected features by boruta by cascade pass: zscore_selected
+# to locate selected features by RRF by cascade pass: allBIRADSfeatures
+
+```
+
+```{r fig.width=12, fig.height=12, warning=FALSE}
+# read datasets
+npatients = length(uniq_cad)
+allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+    
+## formant
+allfeatures = rbind(allf[[1]], allf[[2]])
+alllesioninfo = rbind(allf[[5]], allf[[6]])
+
+### print number of total lesions 
+# before was ##   C / NC = 140 / 132
+print(summary(as.factor(allfeatures$orig_label)))
+
+#######################
+# format datasets with find_t2_signal_int as response variable
+allfeaturest2_signal = cbind(allfeatures["find_t2_signal_int"], allfeatures[,2:ncol(allfeatures)])
+allfeaturest2_signal = allfeaturest2_signal[-c(199,ncol(allfeatures))]
+
+allfeaturest2_signal$find_t2_signal_int = as.factor(allfeaturest2_signal$find_t2_signal_int)
+summary(allfeaturest2_signal$find_t2_signal_int)
+
+#######################
+# Subset previuosly selected features
+# for Boruta
+borutasel = unique(zscore_selected[,2:3])
+borutasel = borutasel[-grep("shadow",borutasel$selfeat),]
+rrfsel = unique(allBIRADSfeatures[,c(1,3)])
+
+selBy = rbind( data.frame(feature=borutasel$selfeat, 
+                          pass=borutasel$SelectedFeatureGroup, selectedBy="boruta"), 
+               data.frame(feature=rrfsel$selfeat, 
+                          pass=rrfsel$SelectedFeatureGroup, selectedBy="rrf") )
+g <- ggplot(selBy, aes(x=factor(feature), y=pass,  group=pass, color=selectedBy))
+g +  geom_line(size=0.5, colour="black") + geom_point(size=3, position="dodge") + coord_flip() +  theme_bw(base_size = 14) 
+
+# print features commonly selected
+commonlyselBy = summary(factor(selBy$feature))
+table(commonlyselBy[commonlyselBy >= 2])
+# for variables picked in every pass both for rrf and boruta
+print(commonlyselBy[commonlyselBy >= 4])
+print(commonlyselBy[commonlyselBy == 3])
+
+```
+
+
+
+Building a Random Forest classifier for BIRADS Tw2SI:  Categorial predictor of RSI on T2w Levels: Hyperintense, Slightly hyperintense, Hypointensity, None
+=======
+```{r warning=FALSE}
+###############
+### PRODUCE RAND FOREST via RPART (control # trees))
+###################################################
+### code forest Train: 
+### parameters, T= # of trees, D= tree depth, dat
+###################################################
+library(MASS)
+library(klaR)
+library(caret)
+library(rpart)
+library(rpart.plot)
+require(ggplot2)
+library(pROC)
+
+rpart_forestTrain <- function(T, D, TrainsetD) {
+  # set control
+  fitparm = rpart.control(maxdepth = D, minsplit = 0, minbucket = 1, cp = 0.01,  xval = 10, 
+                          maxcompete = 0, maxsurrogate = 5, usesurrogate = 0, surrogatestyle = 0)
+  # init forest
+  forest = list()
+  for (t in 1:T){
+    #cat("Tree # ", t, "\n")  
+    # Randomize boostrap sample to train tree t
+    nsamples = sample(1:nrow(TrainsetD), nrow(TrainsetD), replace=TRUE)
+    samTrainsetD = TrainsetD[nsamples,]
+    
+    # find subsample of var
+    subvar = sample(2:ncol(TrainsetD)-2, sqrt(ncol(TrainsetD)-2), replace = TRUE)
+    subfeat = colnames(TrainsetD)[subvar]
+    
+    # train tree
+    treedata <- rpart(paste("find_t2_signal_int ~ ", paste(subfeat, collapse= "+")), 
+                      data = TrainsetD, control=fitparm)
+    
+    # display the probability per class of observations in the node (conditioned on the node, sum across a node is 1) plus the percentage of observations in the node
+    if (T<1){
+      print(treedata)
+      prp(treedata, type=2, digits=3, extra = 102, under=TRUE, nn=TRUE, col="black", 
+          box.col=rainbow(2)[2], varlen=0, faclen=0, branch.type=0, gap=0, cex=.7,
+          fallen.leaves=TRUE) # use fallen.leaves=TRUE, to plot at bottom  
+    }  
+    
+    # append
+    forest <- append(forest, list(tree = treedata))    
+  }
+  
+  output <- list(forest=forest)
+  return(output)
+}
+
+###################################################
+### code forest Test: 
+### parameters, T= # of trees, forest, TrainsetD, TestsetD
+###################################################
+rpart_forestTest <- function(T, TrainsetD, TestsetD, forest, predvar) {
+  # split train/test cases
+  fclasspotrain=list()
+  for (t in 1:T){
+    # Calcultate posterior Probabilities on grid points
+    temp <- predict(forest[t]$tree, newdata = TrainsetD) #
+    fclasspotrain <- append(fclasspotrain, list(cpo = temp))
+  }
+  
+  # run testing cases
+  fclasspotest=list()
+  for (t in 1:T){
+    # Calcultate posterior Probabilities on grid points
+    temp <- predict(forest[t]$tree, newdata = TestsetD) #
+    fclasspotest <- append(fclasspotest, list(cpo = temp))
+  }
+  
+  # performance on Train/Test set separately
+  # extract ensamble class probabilities (when T > 1)
+  trainpts = fclasspotrain[1]$cpo
+  testpts = fclasspotest[1]$cpo
+  # init ensample class posteriors
+  enclasspotrain <- matrix(, nrow = nrow(as.data.frame(trainpts)), ncol = 2)
+  enclasspotest <- matrix(, nrow = nrow(as.data.frame(testpts)), ncol = 2)
+  enclasspotrain[,1] = fclasspotrain[1]$cpo[,1]
+  enclasspotest[,1] = fclasspotest[1]$cpo[,1]
+  enclasspotrain[,2] = fclasspotrain[1]$cpo[,2]
+  enclasspotest[,2] = fclasspotest[1]$cpo[,2]
+  if(T>=2){
+    for (t in 2:T){
+      #train
+      enclasspotrain[,1] = enclasspotrain[,1]+fclasspotrain[t]$cpo[,1]
+      enclasspotrain[,2] = enclasspotrain[,2]+fclasspotrain[t]$cpo[,2]
+      #test
+      enclasspotest[,1] = enclasspotest[,1]+fclasspotest[t]$cpo[,1]
+      enclasspotest[,2] = enclasspotest[,2]+fclasspotest[t]$cpo[,2]
+    }
+  }
+  # majority voting averaging
+  enclasspotrain = (1/T)*enclasspotrain
+  enclasspotest = (1/T)*enclasspotest
+  
+  # on training
+  classes = levels(TrainsetD[,"find_t2_signal_int"])
+  trainprob = data.frame(C1=enclasspotrain[,1],
+                         C2=enclasspotrain[,2],
+                         pred=classes[apply(enclasspotrain, 1, which.max)], 
+                         obs=TrainsetD[,"find_t2_signal_int"])
+  colnames(trainprob)[1:2] <- classes
+  pred=ifelse(apply(enclasspotrain, 1, which.max)==1,classes[1],classes[2])
+  perf_train =  sum(ifelse(pred == TrainsetD[,"find_t2_signal_int"],1,0))/length(TrainsetD[,"find_t2_signal_int"])
+  #print(perf_train)
+  
+  # on testing
+  testprob = data.frame(C1=enclasspotest[,1],
+                        C2=enclasspotest[,2],
+                        pred=classes[apply(enclasspotest, 1, which.max)], 
+                        obs=TestsetD[,"find_t2_signal_int"])
+  colnames(testprob)[1:2] <- classes
+  pred=ifelse(apply(enclasspotest, 1, which.max)==1,classes[1],classes[2])
+  perf_test = sum(ifelse(pred == TestsetD[,"find_t2_signal_int"],1,0))/length(TestsetD[,"find_t2_signal_int"])
+  #print(perf_test)  
+  
+  output <- list(etrain=perf_train, etest=perf_test, trainprob=trainprob, testprob=testprob)
+  return(output)
+}
+
+
+###################################################
+### code to predict Test cases in Cascade pass: 
+### parameters, T= # of trees, forest, TrainsetD, TestsetD
+###################################################
+rpart_cascadeTest <- function(T, testc, predvar, forest){ 
+                              
+  fclasspo=list()
+  for (t in 1:T){
+    # Calcultate posterior Probabilities on grid points
+    temp <- predict(forest[t]$tree, newdata = testc) #
+    fclasspo <- append(fclasspo, list(cpo = temp))
+  }
+  
+  # performance on Test set 
+  # extract ensamble class probabilities (when T > 1)
+  pts = fclasspo[1]$cpo
+  # init ensample class posteriors
+  enclasspo <- matrix(, nrow = nrow(as.data.frame(pts)), ncol = 2)
+  enclasspo[,1] = fclasspo[1]$cpo[,1]
+  enclasspo[,2] = fclasspo[1]$cpo[,2]
+  if(T>=2){
+    for (t in 2:T){
+      enclasspo[,1] = enclasspo[,1]+fclasspo[t]$cpo[,1]
+      enclasspo[,2] = enclasspo[,2]+fclasspo[t]$cpo[,2]
+    }
+  }
+  # majority voting averaging
+  enclasspo = (1/T)*enclasspo
+  
+  # on training
+  classes = levels(testc[,predvar])
+  prob = data.frame(C1=enclasspo[,1],
+                         C2=enclasspo[,2],
+                         pred=classes[apply(enclasspo, 1, which.max)], 
+                         obs=testc[,predvar])
+  colnames(prob)[1:2] <- classes
+  pred = ifelse(apply(enclasspo, 1, which.max)==1,classes[1],classes[2])
+  perf =  sum(ifelse(pred == testc[,predvar],1,0))/length(testc[,predvar])
+  print(paste0("Accuracy of cascade pass = ",perf))
+  
+  roc = roc(prob$obs, prob[,1])
+  print(roc$auc)
+  print(summary(prob))
+
+  output <- list(paccu=perf, prob=prob)
+  return(output)
+}
+
+
+# create grid of evaluation points
+gT = c(10,20,40,50,60,100,250,400,500)
+gD = c(1,3,5,10,20)
+grd <- expand.grid(x = gD, y = gT)
+
+# example with 1 tree
+#D=4
+#T=1
+#F = rpart_forestTrain(T, D, BIRADS_HyperNone, trainc$Resample1, "find_t2_signal_int") 
+#perfmtree <- rpart_forestTest(T, BIRADS_HyperNone, F$forest, trainc$Resample1, "find_t2_signal_int")
+
+```
+
+```{r fig.width=12, fig.height=12, warning=FALSE}
+## split in train/test for each T2wSI category
+BIRADS_HyperNone = allfeaturest2_signal
+BIRADS_HyperNone$find_t2_signal_int = factor(ifelse(BIRADS_HyperNone$find_t2_signal_int=="None","None","Intense"))
+BIRADS_HyperNone$find_t2_signal_int = factor(BIRADS_HyperNone$find_t2_signal_int)
+summary(BIRADS_HyperNone$find_t2_signal_int)
+
+b = as.character(subset(borutasel, SelectedFeatureGroup=="Hyper.v.s.None")$selfeat)
+rf = as.character(subset(rrfsel, SelectedFeatureGroup=="Hyper.v.s.None")$selfeat)
+feat_HyperNone = unique(c(b,rf))
+
+## split in train/test for each T2wSI category
+BIRADS_IntenseorNot = allfeaturest2_signal[allfeaturest2_signal$find_t2_signal_int != "None", ]
+BIRADS_IntenseorNot$find_t2_signal_int = factor(ifelse(BIRADS_IntenseorNot$find_t2_signal_int=="Hypointense or not seen",
+                                                "Hypointense or not seen","Intense"))
+summary(BIRADS_IntenseorNot$find_t2_signal_int)
+
+b = as.character(subset(borutasel, SelectedFeatureGroup=="Intense.v.s.Notseen")$selfeat)
+rf = as.character(subset(rrfsel, SelectedFeatureGroup=="Intense.v.s.Notseen")$selfeat)
+feat_IntenseorNot = unique(c(b,rf))
+
+## split in train/test for each T2wSI category
+BIRADS_HyperorSlight = allfeaturest2_signal[allfeaturest2_signal$find_t2_signal_int != "None", ]
+BIRADS_HyperorSlight = BIRADS_HyperorSlight[BIRADS_HyperorSlight$find_t2_signal_int != "Hypointense or not seen", ]
+BIRADS_HyperorSlight$find_t2_signal_int = factor(BIRADS_HyperorSlight$find_t2_signal_int)
+summary(BIRADS_HyperorSlight$find_t2_signal_int)
+
+
+b = as.character(subset(borutasel, SelectedFeatureGroup=="Hyper.v.s.slightlyHyper")$selfeat)
+rf = as.character(subset(rrfsel, SelectedFeatureGroup=="Hyper.v.s.slightlyHyper")$selfeat)
+feat_HyperorSlight = unique(c(b,rf))
+
+summary(allfeaturest2_signal$find_t2_signal_int)
+
+# split in train/test buckets
+set.seed(01)
+trainc = createDataPartition(y = allfeaturest2_signal$find_t2_signal_int, # n = 689
+                                 p = .9, ## The percentage of data in the training set
+                                 list = TRUE) ## The format of the results. 
+
+trainc_HyperNone = data.frame(id = alllesioninfo$lesion_id)
+trainc_HyperNone$train = rep(FALSE,nrow(trainc_HyperNone))
+trainc_HyperNone$train[trainc$Resample1] = TRUE
+
+trainc_IntenseorNot = data.frame()
+# for BIRADS_IntenseorNot
+for(k in 1:nrow(BIRADS_IntenseorNot)){
+  if( rownames(BIRADS_IntenseorNot[k,]) %in% trainc_HyperNone$id[trainc_HyperNone$train] ){
+    df = data.frame(id = rownames(BIRADS_IntenseorNot[k,]), train=TRUE)
+  }else{
+    df = data.frame(id = rownames(BIRADS_IntenseorNot[k,]), train=FALSE)
+  }
+  trainc_IntenseorNot = rbind(trainc_IntenseorNot, df)
+}
+
+
+trainc_HyperorSlight = data.frame()
+# for BIRADS_IntenseorNot
+for(k in 1:nrow(BIRADS_HyperorSlight)){
+  if( rownames(BIRADS_HyperorSlight[k,]) %in% trainc_HyperNone$id[trainc_HyperNone$train] ){
+    df = data.frame(id = rownames(BIRADS_HyperorSlight[k,]), train=TRUE)
+  }else{
+    df = data.frame(id = rownames(BIRADS_HyperorSlight[k,]), train=FALSE)
+  }
+  trainc_HyperorSlight = rbind(trainc_HyperorSlight, df)
+}
+
+```
+
+
+Pass 1:  Hyperintense and None or absent
+====
+```{r fig.width=12, fig.height=12, warning=FALSE}
+##################################
+# first predict between Hyperintense and None or absent
+# data = trainHyperNone, testHyperNone, trainc_HyperNone
+# features = feat_HyperNone
+# results:  bestune_HyperNone
+
+## compare "low" and "high" values (median LMSIR 2.3190) for more predictive features
+medianLMSIR = summary(BIRADS_HyperNone$LMSIR)[3]
+LMSIRt2_signal = BIRADS_HyperNone
+LMSIRt2_signal$LMSIRind = ifelse(LMSIRt2_signal$LMSIR <= medianLMSIR,"low","high")
+
+with(LMSIRt2_signal, do.call(rbind, tapply(find_t2_signal_int, LMSIRind, function(x) c(M = summary(x)))))
+
+trainHyperNone = BIRADS_HyperNone[trainc_HyperNone$train,]
+testHyperNone = BIRADS_HyperNone[!trainc_HyperNone$train,]
+
+trainHyperNone$find_t2_signal_int = factor(ifelse(trainHyperNone$find_t2_signal_int=="None","None","Intense"))
+testHyperNone$find_t2_signal_int = factor(ifelse(testHyperNone$find_t2_signal_int=="None","None","Intense"))
+summary(trainHyperNone$find_t2_signal_int)
+summary(testHyperNone$find_t2_signal_int)
+
+grdperf = data.frame(grd)
+grdperf$acuTrain =0;  grdperf$rocTrain =0
+grdperf$acuTest =0;   grdperf$rocTest =0
+
+# perform grid greedy search
+for(k in 1:nrow(grd)){
+    D=grd[k,1]
+    ntree=grd[k,2]
+    cat("RF #Trees ", ntree, "\n")
+    cat("RF max.depth ", D, "\n")
+    # train a Random Forest with rcart trees (T, TrainsetD, TestsetD, forest)
+    T2wSIrf = rpart_forestTrain(ntree, D, trainHyperNone[,c("find_t2_signal_int",feat_HyperNone)])
+    perfF <- rpart_forestTest(ntree, trainHyperNone[,c("find_t2_signal_int",feat_HyperNone)],
+                              testHyperNone[,c("find_t2_signal_int",feat_HyperNone)], T2wSIrf$forest)
+    
+    # for train
+    ROCF_train <- roc(perfF$trainprob$obs, perfF$trainprob[,1])
+    print(ROCF_train$auc)
+    # collect data
+    grdperf$acuTrain[k] = as.numeric(perfF$etrain)
+    grdperf$rocTrain[k] = as.numeric(ROCF_train$auc)
+    # for test
+    ROCF_test <- roc(perfF$testprob$obs, perfF$testprob[,1])
+    print(ROCF_test$auc)
+    
+    # collect data
+    grdperf$acuTest[k] = as.numeric(perfF$etest)
+    grdperf$rocTest[k] = as.numeric(ROCF_test$auc)
+}
+print(grdperf)
+bestune_HyperNone = grdperf[grdperf$rocTest == max(grdperf$rocTest),][1,]
+print(bestune_HyperNone)
+
+# reformat results to plot
+# for RF HyperHypo
+df_HyperNone = data.frame(ntrees=grdperf$y, Depth=grdperf$x)
+df_HyperNone$AUCTrain = grdperf$rocTrain
+df_HyperNone$AUCTest = grdperf$rocTest
+df_HyperNone$classifier = "Hyper.v.s.None"
+
+#plot 
+p <- ggplot(data=df_HyperNone, aes(x=ntrees, y=AUCTest, group=Depth, colour=factor(Depth)))
+p + geom_line(size=0.9) + geom_point(size=2)  + theme_bw(base_size = 14) 
+p <- ggplot(data=df_HyperNone, aes(x=Depth, y=AUCTest, group=ntrees, colour=factor(ntrees)))
+p + geom_line(size=0.9) + geom_point(size=2) + theme_bw(base_size = 14) 
+
+```
+
+
+Pass 2:  Intense and not seen ( combine Hyper and Slightly hyper into "Intense")
+====
+```{r fig.width=12, fig.height=12, warning=FALSE}
+
+##################################
+# Second predict between Intense and not seen ( combine Hyper and Slightly hyper into "Intense")
+# data = trainIntenseorNot, testIntenseorNot, trainc_IntenseorNot
+# features = feat_IntenseorNot
+# results:  bestune_IntenseorNot
+
+## compare "low" and "high" values (median LMSIR 2.3190) for more predictive features
+medianLMSIR = summary(BIRADS_IntenseorNot$LMSIR)[3]
+LMSIRt2_signal = BIRADS_IntenseorNot
+LMSIRt2_signal$LMSIRind = ifelse(LMSIRt2_signal$LMSIR <= medianLMSIR,"low","high")
+
+with(LMSIRt2_signal, do.call(rbind, tapply(find_t2_signal_int, LMSIRind, function(x) c(M = summary(x)))))
+
+
+# format same datasets
+trainIntenseorNot = BIRADS_IntenseorNot[trainc_IntenseorNot$train,]
+testIntenseorNot = BIRADS_IntenseorNot[!trainc_IntenseorNot$train,]
+
+trainIntenseorNot$find_t2_signal_int = factor(ifelse(trainIntenseorNot$find_t2_signal_int=="Hypointense or not seen","Hypointense or not seen","Intense"))
+testIntenseorNot$find_t2_signal_int = factor(ifelse(testIntenseorNot$find_t2_signal_int=="Hypointense or not seen","Hypointense or not seen","Intense"))
+
+summary(trainIntenseorNot$find_t2_signal_int)
+summary(testIntenseorNot$find_t2_signal_int)
+
+grdperf = data.frame(grd)
+grdperf$acuTrain =0;  grdperf$rocTrain =0
+grdperf$acuTest =0;   grdperf$rocTest =0
+
+# perform grid greedy search
+for(k in 1:nrow(grd)){
+    D=grd[k,1]
+    ntree=grd[k,2]
+    cat("RF #Trees ", ntree, "\n")
+    cat("RF max.depth ", D, "\n")
+    # train a Random Forest with rcart trees
+    T2wSIrf = rpart_forestTrain(ntree, D, trainIntenseorNot[,c("find_t2_signal_int",feat_IntenseorNot)])
+    perfF <- rpart_forestTest(ntree, trainIntenseorNot[,c("find_t2_signal_int",feat_IntenseorNot)], 
+                              testIntenseorNot[,c("find_t2_signal_int",feat_IntenseorNot)], T2wSIrf$forest)
+    
+    # for train
+    ROCF_train <- roc(perfF$trainprob$obs, perfF$trainprob[,1])
+    print(ROCF_train$auc)
+    # collect data
+    grdperf$acuTrain[k] = as.numeric(perfF$etrain)
+    grdperf$rocTrain[k] = as.numeric(ROCF_train$auc)
+    # for test
+    ROCF_test <- roc(perfF$testprob$obs, perfF$testprob[,1])
+    print(ROCF_test$auc)
+    
+    # collect data
+    grdperf$acuTest[k] = as.numeric(perfF$etest)
+    grdperf$rocTest[k] = as.numeric(ROCF_test$auc)
+}
+print(grdperf)
+bestune_IntenseorNot = grdperf[grdperf$rocTest == max(grdperf$rocTest),][1,]
+print(bestune_IntenseorNot)
+
+# reformat results to plot
+# for RF HyperHypo
+df_IntenseorNot = data.frame(ntrees=grdperf$y, Depth=grdperf$x)
+df_IntenseorNot$AUCTrain = grdperf$rocTrain
+df_IntenseorNot$AUCTest = grdperf$rocTest
+df_IntenseorNot$classifier = "Intense.v.s.Notseen"
+
+#plot 
+p <- ggplot(data=df_IntenseorNot, aes(x=ntrees, y=AUCTest, group=Depth, colour=factor(Depth)))
+p + geom_line(size=0.9) + geom_point(size=2)  + theme_bw(base_size = 14) 
+p <- ggplot(data=df_IntenseorNot, aes(x=Depth, y=AUCTest, group=ntrees, colour=factor(ntrees)))
+p + geom_line(size=0.9) + geom_point(size=2) + theme_bw(base_size = 14) 
+
+```
+
+
+Pass 3:  Intense and not seen ( combine Hyper and Slightly hyper into "Intense")
+======
+```{r fig.width=12, fig.height=12, warning=FALSE}
+##################################
+# Thrid predict between HyperIntense and  Slightly hyper
+# data = trainHyperorSlight,testHyperorSlight, trainc_HyperorSlight
+# features = feat_HyperorSlight
+# results:  bestune_HyperorSlight
+
+trainHyperorSlight = BIRADS_HyperorSlight[trainc_HyperorSlight$train,]
+testHyperorSlight = BIRADS_HyperorSlight[!trainc_HyperorSlight$train,]
+
+summary(trainHyperorSlight$find_t2_signal_int)
+summary(testHyperorSlight$find_t2_signal_int)
+
+grdperf = data.frame(grd)
+grdperf$acuTrain =0;  grdperf$rocTrain =0
+grdperf$acuTest =0;   grdperf$rocTest =0
+# perform grid greedy search
+for(k in 1:nrow(grd)){
+    D=grd[k,1]
+    ntree=grd[k,2]
+    cat("RF #Trees ", ntree, "\n")
+    cat("RF max.depth ", D, "\n")
+    # train a Random Forest with rcart trees
+    T2wSIrf = rpart_forestTrain(ntree, D, trainHyperorSlight[,c("find_t2_signal_int",feat_HyperorSlight)])
+    perfF <- rpart_forestTest(ntree, trainHyperorSlight[,c("find_t2_signal_int",feat_HyperorSlight)], 
+                              testHyperorSlight[,c("find_t2_signal_int",feat_HyperorSlight)], T2wSIrf$forest)
+     
+    # for train
+    ROCF_train <- roc(perfF$trainprob$obs, perfF$trainprob[,1])
+    print(ROCF_train$auc)
+    # collect data
+    grdperf$acuTrain[k] = as.numeric(perfF$etrain)
+    grdperf$rocTrain[k] = as.numeric(ROCF_train$auc)
+    # for test
+    ROCF_test <- roc(perfF$testprob$obs, perfF$testprob[,1])
+    print(ROCF_test$auc)
+    
+    # collect data
+    grdperf$acuTest[k] = as.numeric(perfF$etest)
+    grdperf$rocTest[k] = as.numeric(ROCF_test$auc)
+}
+print(grdperf)
+bestune_HyperorSlight = grdperf[grdperf$rocTest == max(grdperf$rocTest),][1,]
+print(bestune_HyperorSlight)
+
+# reformat results to plot
+# for RF HyperHypo
+df_HyperorSlight = data.frame(ntrees=grdperf$y, Depth=grdperf$x)
+df_HyperorSlight$AUCTrain = grdperf$rocTrain
+df_HyperorSlight$AUCTest = grdperf$rocTest
+df_HyperorSlight$classifier = "Hyper.v.s.slightlyHyper"
+
+#plot 
+p <- ggplot(data=df_HyperorSlight, aes(x=ntrees, y=AUCTest, group=Depth, colour=factor(Depth)))
+p + geom_line(size=0.9) + geom_point(size=2)  + theme_bw(base_size = 14) 
+p <- ggplot(data=df_HyperorSlight, aes(x=Depth, y=AUCTest, group=ntrees, colour=factor(ntrees)))
+p + geom_line(size=0.9) + geom_point(size=2) + theme_bw(base_size = 14) 
+
+```
+
+
+
+Build final classifiers
+=======
+```{r fig.width=12, fig.height=12, warning=FALSE}
+# data = trainHyperNone, trainc_HyperNone
+# features = feat_HyperNone
+# results:  bestune_HyperNone
+D=bestune_HyperNone$x
+ntree=bestune_HyperNone$y
+cat("Pass1: HyperNone: \n","RF max.depth ", D, "\n","RF #Trees ", ntree, "\n")
+
+# train a Random Forest with rcart trees
+rfboot_HyperNone = list()
+pboot_HyperNone = c()
+while(length(rfboot_HyperNone) < ntree){
+    T2wSI_HyperNone = rpart_forestTrain(1, D,trainHyperNone[,c("find_t2_signal_int",feat_HyperNone)])
+    nrs = sample(1:nrow(testHyperNone),nrow(testHyperNone),replace=TRUE)
+    p=rpart_forestTest(1, trainHyperNone, testHyperNone[nrs,], T2wSI_HyperNone$forest)
+    
+    # append boot results
+    # for test cases
+    ROCF_test <- roc(p$testprob$obs, p$testprob[,1])
+    
+    if(ROCF_test$auc>=0.8){
+      print(ROCF_test$auc)
+      pboot_HyperNone = c(pboot_HyperNone, ROCF_test$auc)
+      rfboot_HyperNone=append(rfboot_HyperNone,T2wSI_HyperNone$forest)
+    }
+}
+
+## final performance
+ttrees = length(rfboot_HyperNone)
+finalperf_HyperNone = rpart_forestTest(ttrees, trainHyperNone, testHyperNone, rfboot_HyperNone)
+# How well does this RF model perform on the test set?
+finalROCF_HyperNone <- roc(finalperf_HyperNone$testprob$obs, finalperf_HyperNone$testprob[,1])
+print(finalROCF_HyperNone$auc)    
+
+
+# data = BIRADS_IntenseorNot  , trainc_IntenseorNot
+# features = feat_IntenseorNot
+# results:  bestune_IntenseorNot
+D=bestune_IntenseorNot$x
+ntree=bestune_IntenseorNot$y
+cat("Pass2: IntenseorNot: \n","RF max.depth ", D, "\n","RF #Trees ", ntree, "\n")
+
+# train a Random Forest with rcart trees
+rfboot_IntenseorNot = list()
+pboot_IntenseorNot = c()
+while(length(rfboot_IntenseorNot) < ntree){
+    T2wSI_IntenseorNot = rpart_forestTrain(1, D, trainIntenseorNot[,c("find_t2_signal_int",feat_IntenseorNot)])
+    nrs = sample(1:nrow(testIntenseorNot),nrow(testIntenseorNot),replace=TRUE)
+    p=rpart_forestTest(1, trainIntenseorNot, testIntenseorNot[nrs,], T2wSI_IntenseorNot$forest)
+    
+    # append boot results
+    # for test cases
+    ROCF_test <- roc(p$testprob$obs, p$testprob[,1])
+    
+    if(ROCF_test$auc>=0.9){
+      print(ROCF_test$auc)
+      pboot_IntenseorNot = c(pboot_IntenseorNot, ROCF_test$auc)
+      rfboot_IntenseorNot=append(rfboot_IntenseorNot, T2wSI_IntenseorNot$forest)
+    }
+}
+
+## final performance
+ttrees = length(rfboot_IntenseorNot)
+finalperf_IntenseorNot = rpart_forestTest(ttrees, trainIntenseorNot, testIntenseorNot, rfboot_IntenseorNot)
+# How well does this RF model perform on the test set?
+finalROCF_IntenseorNot <- roc(finalperf_IntenseorNot$testprob$obs, finalperf_IntenseorNot$testprob[,1])
+print(finalROCF_IntenseorNot$auc)    
+
+
+# data = BIRADS_HyperorSlight  , trainc_HyperorSlight
+# features = feat_HyperorSlight
+# results:  bestune_HyperorSlight
+D=bestune_HyperorSlight$x
+ntree=bestune_HyperorSlight$y
+cat("Pass3: HyperorSlight: \n","RF max.depth ", D, "\n","RF #Trees ", ntree, "\n")
+
+# train a Random Forest with rcart trees
+rfboot_HyperorSlight = list()
+pboot_HyperorSlight = c()
+while(length(rfboot_HyperorSlight) < ntree){
+    T2wSI_HyperorSlight = rpart_forestTrain(1, D, trainHyperorSlight[,c("find_t2_signal_int",feat_HyperorSlight)])
+    nrs = sample(1:nrow(testHyperorSlight),nrow(testHyperorSlight),replace=FALSE)
+    p=rpart_forestTest(1, trainHyperorSlight, testHyperorSlight[nrs,], T2wSI_HyperorSlight$forest)
+    
+    # append boot results
+    # for test cases
+    ROCF_test <- roc(p$testprob$obs, p$testprob[,1])
+    
+    if(ROCF_test$auc>=0.9){
+      print(ROCF_test$auc)
+      pboot_HyperorSlight = c(pboot_HyperorSlight, ROCF_test$auc)
+      rfboot_HyperorSlight=append(rfboot_HyperorSlight, T2wSI_HyperorSlight$forest)
+    }
+}
+
+## final performance
+ttrees = length(rfboot_HyperorSlight)
+finalperf_HyperorSlight = rpart_forestTest(ttrees, trainHyperorSlight, testHyperorSlight, rfboot_HyperorSlight)
+# How well does this RF model perform on the test set?
+finalROCF_HyperorSlight <- roc(finalperf_HyperorSlight$testprob$obs, finalperf_HyperorSlight$testprob[,1])
+print(finalROCF_HyperorSlight$auc)  
+
+
+## plot ROCs each pass individually in 10% heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(finalperf_HyperNone$testprob$obs, finalperf_HyperNone$testprob[,1], 
+                           xptext=0.45, yptext=0.65 ,colors[1], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(finalperf_IntenseorNot$testprob$obs, finalperf_IntenseorNot$testprob[,1], 
+                           xptext=0.55, yptext=0.55 ,colors[8], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(finalperf_HyperorSlight$testprob$obs, finalperf_HyperorSlight$testprob[,1], 
+                           xptext=0.65, yptext=0.45 ,colors[12], atitle="ROCs test held-out each pass ")
+
+legend("bottomright", 
+       legend = c(paste0("Hyper.v.s.None"), paste0("Intense.v.s.Notseen"),paste0("Hyper.v.s.slightlyHyper")),
+       col = c(colors[1],colors[8],colors[12]), lwd = 2)
+
+```
+
+Perfomance in cascade arrangement. 3 consecutive pases
+=====
+```{r fig.width=12, fig.height=12, warning=FALSE}
+summary(allfeaturest2_signal$find_t2_signal_int)
+
+# first pass
+testc = allfeaturest2_signal[-trainc$Resample1,]
+pass1_testc = testc
+pass1_labels = pass1_testc$find_t2_signal_int
+
+summary(pass1_testc$find_t2_signal_int)
+
+pass1_testc$find_t2_signal_int = factor(ifelse(pass1_labels=="None","None","Intense"))
+pass1 = rpart_cascadeTest(length(rfboot_HyperNone), pass1_testc, "find_t2_signal_int", rfboot_HyperNone)
+
+
+Ts_pass1 = pass1$prob[pass1$prob$pred == pass1$prob$obs,]
+Ts_cascade = data.frame(P=Ts_pass1$Intense, N=Ts_pass1$None, pred=Ts_pass1$pred, obs=Ts_pass1$obs )
+Fs_pass1 = pass1$prob[pass1$prob$pred != pass1$prob$obs,]
+Fs_cascade = data.frame(P=Fs_pass1$Intense, N=Fs_pass1$None, pred=Fs_pass1$pred, obs=Fs_pass1$obs )
+
+cascade_output = data.frame(orig=pass1_labels,
+                     Intense1=pass1$prob[,1],
+                     None=pass1$prob[,2],
+                     pred1=pass1$prob[,3],
+                     obs1=pass1$prob[,4])
+
+cMpass1 = confusionMatrix(pass1$prob$obs, pass1$prob$pred)
+print(cMpass1$overall)
+print(cMpass1$byClass)
+
+### find test cases passing to pass2, (whos prediction is "Intense")
+ind_pass1 = as.numeric(rownames(pass1$prob[pass1$prob$pred=="Intense",]))
+ind_notpass1 = as.numeric(rownames(pass1$prob[pass1$prob$pred=="None",]))
+cascade_output$pass1 = ifelse(pass1$prob$pred=="Intense",TRUE,FALSE)
+print(paste0("passing 1 = ",sum(cascade_output$pass1)))
+
+# 2nd pass
+pass2_testc = testc[ind_pass1,]
+ind_pass1 = ind_pass1[pass2_testc$find_t2_signal_int != "None"]
+pass2_testc = testc[ind_pass1,]
+pass2_testc$find_t2_signal_int = factor(ifelse(pass2_testc$find_t2_signal_int=="Hypointense or not seen","Hypointense or not seen","Intense"))
+
+########################
+pass2 = rpart_cascadeTest(length(rfboot_IntenseorNot), pass2_testc, "find_t2_signal_int", rfboot_IntenseorNot)
+
+# expand results by numeric
+cascade_output$"Hypointense or not seen" = rep(0 ,nrow(cascade_output))
+cascade_output$"Intense2" = rep(0 ,nrow(cascade_output)) 
+cascade_output[ind_pass1,7:8]=pass2$prob[,1:2]
+
+cascade_output$pred2 = rep(0 ,nrow(cascade_output))
+cascade_output$obs2 = rep(0 ,nrow(cascade_output))
+cascade_output[ind_pass1,9] = as.character(pass2$prob[,3]); cascade_output[ind_pass1,10] = as.character(pass2$prob[,4])
+cascade_output$pass2 = ifelse(cascade_output$pred2=="Intense",TRUE,FALSE)
+
+cMpass2 = confusionMatrix(pass2$prob$obs, pass2$prob$pred)
+print(cMpass2$overall)
+print(cMpass2$byClass)
+
+Ts_pass2 = pass2$prob[pass2$prob$pred == pass2$prob$obs,]
+df = data.frame(P=Ts_pass2$"Hypointense or not seen", N=Ts_pass2$Intense, pred=Ts_pass2$pred, obs=Ts_pass2$obs )
+Ts_cascade = rbind(Ts_cascade, df)
+Fs_pass2 = pass2$prob[pass2$prob$pred != pass2$prob$obs,]
+df = data.frame(P=Fs_pass2$"Hypointense or not seen", N=Fs_pass2$Intense, pred=Fs_pass2$pred, obs=Fs_pass2$obs )
+Fs_cascade = rbind(Fs_cascade, df)
+
+### find test cases passing to pass3, (whos prediction is "Intense")
+ind_pass2 = as.numeric(rownames(pass2$prob[pass2$prob$pred=="Intense",]))
+ind_notpass2 = as.numeric(rownames(pass2$prob[pass2$prob$pred=="Hypointense or not seen",]))
+print(paste0("passing 2 = ",sum(cascade_output$pass2)))
+
+# 2nd pass
+pass3_testc = testc[ind_pass1,][ind_pass2,]
+ind_pass2 = ind_pass2[pass3_testc$find_t2_signal_int != "Hypointense or not seen"]
+pass3_testc = testc[ind_pass1,][ind_pass2,]
+pass3_testc$find_t2_signal_int = factor(pass3_testc$find_t2_signal_int)
+  
+########################
+pass3 = rpart_cascadeTest(length(rfboot_HyperorSlight), pass3_testc, "find_t2_signal_int", rfboot_HyperorSlight)
+
+# expand results by numeric
+cascade_output$"Hyperintense" = rep(0,nrow(cascade_output))
+cascade_output$"Slightly hyperintense" = rep(0,nrow(cascade_output)) 
+cascade_output[ind_pass1[ind_pass2],12:13]=pass3$prob[,1:2]
+
+cascade_output$pred3 = rep(0,nrow(cascade_output))
+cascade_output$obs3 = rep(0,nrow(cascade_output))
+cascade_output[ind_pass1[ind_pass2],14] = as.character(pass3$prob[,3]) 
+cascade_output[ind_pass1[ind_pass2],15] = as.character(pass3$prob[,4])
+
+
+Ts_pass3 = pass3$prob[pass3$prob$pred == pass3$prob$obs,]
+df = data.frame(P=Ts_pass3$"Hyperintense", N=Ts_pass3$"Slightly hyperintense", pred=Ts_pass3$pred, obs=Ts_pass3$obs )
+Ts_cascade = rbind(Ts_cascade, df)
+Fs_pass3 = pass3$prob[pass3$prob$pred != pass3$prob$obs,]
+df = data.frame(P=Fs_pass3$"Hyperintense", N=Fs_pass3$"Slightly hyperintense", pred=Fs_pass3$pred, obs=Fs_pass3$obs )
+Fs_cascade = rbind(Fs_cascade, df)
+
+## product all class prediction
+cascade_output$overall = rep(0,nrow(cascade_output))
+# if pass1==FALSE, cascade overall pred = pred1
+pass1_pred = as.character(cascade_output$pred1[cascade_output$pass1==FALSE])[
+  as.character(cascade_output$pred1[cascade_output$pass1==FALSE])!=0]
+cascade_output$overall[cascade_output$pass1==FALSE] = pass1_pred
+
+# if pass2==FALSE AND pass1==TRUE, cascade overall pred = pred2
+pass2_pred = as.character(cascade_output$pred2[cascade_output$pass2==FALSE & cascade_output$pass1==TRUE])[as.character(cascade_output$pred2[cascade_output$pass2==FALSE & cascade_output$pass1==TRUE])!=0]
+cascade_output$overall[cascade_output$pass2==FALSE & cascade_output$pass1==TRUE] = pass2_pred
+  
+# if pass2==TRUE, then it's pred3, either Hyper or SlighHyper
+pass3_pred = as.character(cascade_output$pred3[cascade_output$pass2==TRUE])[as.character(cascade_output$pred3[cascade_output$pass2==TRUE])!=0]
+cascade_output$overall[cascade_output$pass2==TRUE] = pass3_pred
+cascade_output$overall = factor(cascade_output$overall)
+levels(cascade_output$overall) = levels(as.factor(cascade_output$orig))
+
+# final confusion matrix
+cascade = confusionMatrix(as.factor(cascade_output$orig), cascade_output$overall)
+print(cascade)
+print(cascade$overall)
+print(cascade$byClass)
+
+
+## plot ROCs each pass individually in 10% heldout test cases
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(pass1$prob$obs, pass1$prob[,1], 
+                           xptext=0.45, yptext=0.65 ,colors[1], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(pass2$prob$obs, pass2$prob[,1],
+                           xptext=0.55, yptext=0.55 ,colors[8], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(pass3$prob$obs, pass3$prob[,1], 
+                           xptext=0.65, yptext=0.45 ,colors[12], atitle="ROCs test held-out cascade pass ")
+
+legend("bottomright", 
+       legend = c(paste0("Hyper.v.s.None"), paste0("Intense.v.s.Notseen"),paste0("Hyper.v.s.slightlyHyper")),
+       col = c(colors[1],colors[8],colors[12]), lwd = 2)
+
+
+# plot by cascade pass
+# pass1
+dfres_pass1None = subset(pass1$prob, obs == "None")[,3:4]
+dfres_pass1None$category = "Hyper.v.s.None"
+dfres_pass1None$classification = ifelse(as.character(dfres_pass1None$pred) == dfres_pass1None$obs,"correct","incorrect")
+dfres_pass1None$classtype = "cascade"
+
+dfres_pass1Intense = subset(pass1$prob, obs == "Intense")[,3:4]
+dfres_pass1Intense$category = "Hyper.v.s.None"
+dfres_pass1Intense$classification = ifelse(as.character(dfres_pass1Intense$pred) == dfres_pass1Intense$obs,"correct","incorrect")
+dfres_pass1Intense$classtype = "cascade"
+
+dfres_pass1 = rbind(dfres_pass1None, dfres_pass1Intense)
+
+# pass2
+dfres_pass2Hypo = subset(pass2$prob, obs == "Hypointense or not seen")[,3:4]
+dfres_pass2Hypo$category = "Intense.v.s.Notseen"
+dfres_pass2Hypo$classification = ifelse(as.character(dfres_pass2Hypo$pred) == dfres_pass2Hypo$obs,"correct","incorrect")
+dfres_pass2Hypo$classtype = "cascade"
+
+dfres_pass2Intense = subset(pass2$prob, obs == "Intense")[,3:4]
+dfres_pass2Intense$category = "Intense.v.s.Notseen"
+dfres_pass2Intense$classification = ifelse(as.character(dfres_pass2Intense$pred) == dfres_pass2Intense$obs,"correct","incorrect")
+dfres_pass2Intense$classtype = "cascade"
+
+dfres_pass2 = rbind(dfres_pass2Hypo, dfres_pass2Intense)
+
+# pass3
+dfres_pass3Hyper = subset(pass3$prob, obs == "Hyperintense")[,3:4]
+dfres_pass3Hyper$category = "Hyper.v.s.slightlyHyper"
+dfres_pass3Hyper$classification = ifelse(as.character(dfres_pass3Hyper$pred) == dfres_pass3Hyper$obs,"correct","incorrect")
+dfres_pass3Hyper$classtype = "cascade"
+
+dfres_pass3SHyper  = subset(pass3$prob, obs == "Slightly hyperintense")[,3:4]
+dfres_pass3SHyper$category = "Hyper.v.s.slightlyHyper"
+dfres_pass3SHyper$classification = ifelse(as.character(dfres_pass3SHyper$pred) == dfres_pass3SHyper$obs,"correct","incorrect")
+dfres_pass3SHyper$classtype = "cascade"
+
+dfres_pass3 = rbind(dfres_pass3Hyper, dfres_pass3SHyper)
+
+#### plot
+dfres_cascade = rbind(dfres_pass1, dfres_pass2, dfres_pass3)
+g = ggplot(dfres_cascade, aes(factor(category), fill=classification)) 
+g + geom_bar(aes(y = ..count..)) +
+    geom_text(aes(label = format(..count.., digits=2, drop0trailing=TRUE)), stat= "count", vjust = -.5) +
+  facet_grid(~classtype) 
+
+
+```
+
+
+Compare with multiclass RF 
+============
+```{r warning=FALSE, fig.width=12}
+
+# first RF for multi-class
+summary(allfeaturest2_signal$find_t2_signal_int)
+
+# format same datasets
+trainc = allfeaturest2_signal[trainc$Resample1,]
+trainc$find_t2_signal_int = as.factor(trainc$find_t2_signal_int)
+
+# select features
+feat_multi = as.character(unique(rrfsel$selfeat))
+
+# train a 4-way classifier
+library(randomForest) 
+set.seed(02)
+multiSI.rf = randomForest(find_t2_signal_int ~ .,
+                     data=na.omit(trainc[,c("find_t2_signal_int",feat_multi)]),
+                     mtry=sqrt(length(feat_multi)), importance =TRUE)
+print(multiSI.rf)
+
+# How well does this RF model perform on the test set?
+probSI.rf.train = predict(multiSI.rf, newdata=trainc, type="response")
+probSI.rf.test = predict(multiSI.rf, newdata=testc, type="response")
+
+confusionMatrix(trainc$find_t2_signal_int, probSI.rf.train)
+confusionMatrix(testc$find_t2_signal_int, probSI.rf.test)
+
+############## results ffrom pool data
+all_cascade = rbind(Ts_cascade, Fs_cascade)
+confusionMatrix(all_cascade$obs, all_cascade$pred)
+calcAUC_plot(all_cascade$obs, all_cascade[,1], 
+                           xptext=0.45, yptext=0.65 ,colors[1], atitle="all_cascade ROC with 3 passes")
+par(new=TRUE)
+multiprob = predict(multiSI.rf, newdata=testc, type="prob")
+# the multi-class AUC as defined by Hand and Till. This function performs multiclass AUC as defined by Hand and Till (2001). A multiclass AUC is a mean of auc and cannot be plotted.
+multiroc = multiclass.roc(testc$find_t2_signal_int, multiprob[,1], levels=levels(testc$find_t2_signal_int))
+print(multiroc)
+
+```
+
+```{r}
+
+save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/classifierT2wSI.RData")
+
+```
+

@@ -1,0 +1,137 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+
+Since LMSIR is relevant for both malignancy prediction in non-masses (see T2_featureRelevance) and predictive of T2wBIRADSRSI
+======
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width=95)
+
+require(ggplot2)
+library("RSQLite")
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR")
+source('C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/functions.R')
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/allpartitionsetD")
+
+```
+
+
+What features are most predictive of LMSIR (for a predictive regressor)?
+==================
+```{r fig.width=12, fig.height=12, warning=FALSE}
+# read datasets
+npatients = length(uniq_cad)
+allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+    
+## formant
+allfeatures = rbind(allf[[1]], allf[[2]])
+alllesioninfo = rbind(allf[[5]], allf[[6]])
+
+### print number of total lesions 
+# before was ##   C / NC = 140 / 132
+print(summary(as.factor(allfeatures$orig_label)))
+ 
+#######################
+# format datasets with find_T2_signal_int as response variable
+LMSIRt2_signal = na.omit(cbind(allfeatures["LMSIR"], allfeatures[,2:ncol(allfeatures)]))
+LMSIRt2_signal = LMSIRt2_signal[-c(202,ncol(allfeatures))]
+summary(LMSIRt2_signal$LMSIR)
+
+## Multi-class approach
+# via RRF
+library("RRF")
+set.seed(1)
+yLMSIR = LMSIRt2_signal$LMSIR
+allLMSIRt2_signal = LMSIRt2_signal[-c(1,199)]
+
+LMSIR_rrf = RRF(allLMSIRt2_signal, yLMSIR, mtry=1, flagReg = 1, coefReg=0.5,
+             ntree=2000, 
+             localImp=TRUE,
+             proximity=TRUE)
+
+print(LMSIR_rrf)
+
+# overall feature importance
+LMSIR_varImp = data.frame(varImpPlot(LMSIR_rrf, sort=TRUE))
+# sort features by MeanDecAccuracy
+LMSIRvarImp <- LMSIR_varImp[ order(-LMSIR_varImp[,1]), ] 
+# pick only non-zero variables
+LMSIRvarImp = unique(LMSIRvarImp)
+
+# format
+df = data.frame(selfeat=rownames(LMSIRvarImp))
+df$X.IncMSE = LMSIRvarImp$X.IncMSE 
+df$SelectedFeatureGroup = "RRFimp"
+# append
+allLMSIRfeatures = data.frame()
+allLMSIRfeatures = rbind(allLMSIRfeatures, df)
+
+
+# plot most 10 significant features
+pairs(allLMSIRt2_signal[,rownames(LMSIRvarImp)[1:10]], lower.panel=panel.smooth, upper.panel=panel.cor)
+
+# Random Forest feature relevance
+library("Boruta")
+set.seed(1)
+LMSIR_Boruta <- Boruta(LMSIR ~ . , data = LMSIRt2_signal,  doTrace = 2, ntree = 1000)
+print(LMSIR_Boruta)
+
+library("caret")
+confirmedT2_LMSIR <- LMSIR_Boruta$finalDecision[LMSIR_Boruta$finalDecision == "Confirmed"]
+tentativeT2_LMSIR <- LMSIR_Boruta$finalDecision[LMSIR_Boruta$finalDecision == "Tentative"]
+allT2_LMSIR = c(names(confirmedT2_LMSIR), names(tentativeT2_LMSIR))
+
+# Now plot z-scores
+rankings_LMSIR <- LMSIR_Boruta$ImpHistory
+
+LMSIRframezscore_selected = data.frame()
+# process
+for (i in 1:length(allT2_LMSIR)) {
+    cfeature = allT2_LMSIR[i]
+    LMSIRframe = data.frame(zscores = rankings_LMSIR[, cfeature])
+    LMSIRframe$pass = "Boruta"
+    LMSIRframe$feature = cfeature
+    LMSIRframezscore_selected <- rbind(LMSIRframezscore_selected, LMSIRframe)
+}
+# add shadow mean
+LMSIRframe = data.frame(zscores = rankings_LMSIR[, "shadowMean"])
+LMSIRframe$pass = "Boruta"
+LMSIRframe$feature = "shadowMean"
+LMSIRframezscore_selected <- rbind(LMSIRframezscore_selected, LMSIRframe)
+
+# plot for selected features
+p <- ggplot(LMSIRframezscore_selected, aes(factor(feature), zscores, fill = factor(pass)))
+p + geom_boxplot() + coord_flip() + labs(title = "most predictive features for LMSIR")
+
+
+```
+
+compare "low" and "high" LMSIR values for more predictive features
+============
+```{r fig.width=12, fig.height=12, warning=FALSE}
+ 
+## compare "low" and "high" values for more predictive features
+LMSIRt2_signal$LMSIRind = LMSIRt2_signal$LMSIR
+LMSIRt2_signal$LMSIRind = ifelse(LMSIRt2_signal$LMSIRind <= 1,"low","high")
+
+# get average zscores 
+zscores = rankings_LMSIR[, allT2_LMSIR]
+df = data.frame(zscores=apply(zscores, 2, mean))
+df$selfeatures = rownames(df)
+ordered_zscores = df[order(-df[,1]),]
+
+# contrast "low" and "high" with 10 most predictive features
+print(ordered_zscores$selfeatures[1:10])
+with(LMSIRt2_signal, do.call(rbind, tapply(ave_T20, LMSIRind, function(x) c(M = mean(x), SD = sd(x)))))
+with(LMSIRt2_signal, do.call(rbind, tapply(T2_lesionSI, LMSIRind, function(x) c(M = mean(x), SD = sd(x)))))
+with(LMSIRt2_signal, do.call(rbind, tapply(T2_lesionSIstd, LMSIRind, function(x) c(M = mean(x), SD = sd(x)))))
+with(LMSIRt2_signal, do.call(rbind, tapply(T2var_F_r_i, LMSIRind, function(x) c(M = mean(x), SD = sd(x)))))
+with(LMSIRt2_signal, do.call(rbind, tapply(T2texture_energy_nondir, LMSIRind, function(x) c(M = mean(x), SD = sd(x)))))
+
+save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/LMSIR/Rdata/T2_featurespred_LMSIR.RData")
+
+```
+

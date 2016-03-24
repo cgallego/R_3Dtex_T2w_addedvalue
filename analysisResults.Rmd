@@ -1,7 +1,7 @@
 ---
 title: "Analysis of results"
 author: "Cristina Gallego"
-date: "March 14, 2016"
+date: "March 23, 2016"
 output: 
   html_document: 
     fig_caption: yes
@@ -9,87 +9,80 @@ output:
     theme: cerulean
 ---
 
-Analysis of results by reasons
-==========
-```{r}
+Analysis of results by each fold
+==================
+```{r fig.width=12, fig.height=12, warning=FALSE}
 
-imagingdetails = imagingdetails[rownames(lesioninfo),]
-path_tores = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/CADT2_addeddiagvalue.RData"
-perf_all <- loadToEnv((path_tores))[["perf_all"]]; 
-lopcum_results <- loadToEnv((path_tores))[["lopcum_results"]]; 
+library(caret)
+require(ggplot2)
+library("RSQLite")
+library(klaR)
+library(pROC)
+library("Boruta")
+require(data.table)
+library(R.utils)
+library(rpart)
+library(rpart.plot)
+library(R.utils)
+library(nodeHarvest)
 
-## investigate errors
-errors = perf_all[perf_all$pred!=perf_all$obs,]
-caseids = errors$id
-seqdf = data.frame()
+loppath = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue"
+setwd(loppath)
+source("functions.R")
 
-for(k in 1:length(caseids)){
-  df = data.frame(id=caseids[k])
-  radreport = imagingdetails[imagingdetails$lesion_id==caseids[k],"original_report_txt"]
-  cat(radreport)
-  if(grepl("VIBRANT", radreport)){df$T1w="VIBRANT"}else{
-    df$T1w="REVIEW"; 
-    }
-  if(grepl("T2 weighted FSE", radreport)){df$T2w="T2 weighted FSE"}else{
-    df$T2w="REVIEW"; print(perf_all[perf_all$id==caseids[k],])
-  }
-  df$C = perf_all[perf_all$id==caseids[k],"C"]
-  df$NC = perf_all[perf_all$id==caseids[k],"NC"]
-  df$pred = perf_all[perf_all$id==caseids[k],"pred"]
-  df$obs = perf_all[perf_all$id==caseids[k],"obs"]
+nsizes_imgT2 = c()
+nsizes_allT2 = c()
+nsizes_imgT1 = c()
+nsizes_all = c()
 
-  # so far print update
-  print(df)
-  print(lesioninfo[lesioninfo$lesion_id==caseids[k],c(1,3,6:7,13,25:27)])
-  ## find prior histories
-  lesioncomts = lesioninfo[lesioninfo$lesion_id==caseids[k],"proc_lesion_comments_txt"]
-  cat(lesioncomts)
-  surgery=c(" ")
-  if(grepl("mammoplasties", lesioncomts)){surgery = list(c(surgery, "mammoplasties, "))}
-  if(grepl("lumpectomy", lesioncomts)){surgery = list(c(surgery, "lumpectomy, "))}
-  
-  df$surgery = list(c(surgery,lesioncomts))
-  
-  # asppend
-  seqdf = rbind(seqdf, df)
-  
-   ## pause  
-#   cat ("Press [enter] to continue")
-#   line <- readline()
+maxinter_imgT2 = c()
+maxinter_allT2 = c()
+maxinter_imgT1 = c()
+maxinter_all = c()
+
+# load k-fold-out
+for(k in 1:10){  # 1:10f cv
+  df = load(paste0("Outputs/weigNH_addeddiagvalue_3Dtexbagg_cv",k,".RData"))
+  nsizes_imgT2 = c(nsizes_imgT2, treedata_imgT2$nodesize)
+  maxinter_imgT2 = c(maxinter_imgT2, treedata_imgT2$maxinter)
+  nsizes_allT2 = c(nsizes_allT2, treedata_allT2$nodesize)
+  maxinter_allT2 = c(maxinter_allT2, treedata_allT2$maxinter)
+  nsizes_imgT1 = c(nsizes_imgT1, treedata_imgT1$nodesize)
+  maxinter_imgT1 = c(maxinter_imgT1, treedata_imgT1$maxinter)
+  nsizes_all = c(nsizes_all, treedata_all$nodesize)
+  maxinter_all = c(maxinter_all, treedata_all$maxinter)
 }
 
+# for imgT2
+print(table(nsizes_imgT2))
+print(table(maxinter_imgT2))
+# for allT2
+print(table(nsizes_allT2))
+print(table(maxinter_allT2))
+# for imgT1
+print(table(nsizes_imgT1))
+print(table(maxinter_imgT1))
+# for all
+print(table(nsizes_all))
+print(table(maxinter_all))
 
-# subset errors
-errors = seqdf[seqdf$pred!=seqdf$obs,]
-save(errors, file="C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalueRdata/errors.RData")
 
 ```
 
 plot final results
 =================================
-```{r finalres, fig.width=12, fig.height=12, warning=FALSE}
-
-source('functions.R', encoding = 'UTF-8')
-
-# plot
-require(ggplot2)
-lop_accuracies = data.frame(Accuracy=lopaccu_imgT2, type="imgT2w")
-lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_allT2, type="imgT2w+predT2w"))
-lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_imgT1, type="imgT1w"))
-lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=lopaccu_all, type="imgT1+imgT2w+predT2w"))
-
-p <- ggplot(lop_accuracies, aes(type, Accuracy, colour=type))
-p + geom_boxplot() + geom_jitter(width = 0.2)
-
-
+```{r fig.width=12, fig.height=12, warning=FALSE}
 # plot features
-## group with all of the features spaces combined, most contributing T2w feature
+source("functions.R")
 
 ## imgT2featsel ###########
 # pick frequency of 75% or higher as very common feature
 dfimgT2 = data.frame(table(imgT2featsel$selfeat))
-dfimgT2$high = (dfimgT2$Freq>=0.75*max(imgT2featsel$lop))*1
+dfimgT2$high = (dfimgT2$Freq>=0.25*max(imgT2featsel$kfcv) &
+                  dfimgT2$Freq<0.5*max(imgT2featsel$kfcv))*2
+dfimgT2$high = dfimgT2$high + (dfimgT2$Freq>=0.5*max(imgT2featsel$kfcv))*1
 print(dfimgT2[dfimgT2$high==1, ])
+print(dfimgT2[dfimgT2$high==2, ])
 
 #qplot(factor(selfeat), data=imgT2featsel, geom="bar", fill=factor(high))
 ggplot(dfimgT2, aes(x=Var1, y=Freq, fill=factor(high))) + 
@@ -103,9 +96,11 @@ ggplot(dfimgT2, aes(x=Var1, y=Freq, fill=factor(high))) +
 ## allT2featsel ########### 
 # pick frequency of 75% or higher as very common feature
 dfallT2 = data.frame(table(allT2featsel$selfeat))
-dfallT2$high = (dfallT2$Freq>=0.75*max(allT2featsel$lop))*1
+dfallT2$high = (dfallT2$Freq>=0.25*max(allT2featsel$kfcv) &
+                  dfallT2$Freq<0.5*max(allT2featsel$kfcv))*2
+dfallT2$high = dfallT2$high + (dfallT2$Freq>=0.5*max(allT2featsel$kfcv))*1
 print(dfallT2[dfallT2$high==1, ])
-
+print(dfallT2[dfallT2$high==2, ])
 
 #qplot(factor(selfeat), data=allT2featsel, geom="bar", fill=factor(high))
 ggplot(dfallT2, aes(x=Var1, y=Freq, fill=factor(high))) + 
@@ -119,8 +114,11 @@ ggplot(dfallT2, aes(x=Var1, y=Freq, fill=factor(high))) +
 ## imgT1featsel ########### 
 # pick frequency of 75% or higher as very common feature
 dfimgT1 = data.frame(table(imgT1featsel$selfeat))
-dfimgT1$high = (dfimgT1$Freq>=0.75*max(imgT1featsel$lop))*1
+dfimgT1$high = (dfimgT1$Freq>=0.25*max(imgT1featsel$kfcv) &
+                  dfimgT1$Freq<0.5*max(imgT1featsel$kfcv))*2
+dfimgT1$high = dfimgT1$high + (dfimgT1$Freq>=0.5*max(imgT1featsel$kfcv))*1
 print(dfimgT1[dfimgT1$high==1, ])
+print(dfimgT1[dfimgT1$high==2, ])
 
 
 #qplot(factor(selfeat), data=imgT1featsel, geom="bar", fill=factor(high))
@@ -135,9 +133,10 @@ ggplot(dfimgT1, aes(x=Var1, y=Freq, fill=factor(high))) +
 ## allfeatsel ########### 
 # pick frequency of 75% or higher as very common feature
 dfall = data.frame(table(allfeatsel$selfeat))
-dfall$high = (dfall$Freq>=0.5*max(allfeatsel$lop))*1
+dfall$high = (dfall$Freq>=0.25*max(allfeatsel$kfcv) & dfall$Freq<0.5*max(allfeatsel$kfcv))*2
+dfall$high = dfall$high + (dfall$Freq>=0.5*max(allfeatsel$kfcv))*1
 print(dfall[dfall$high==1, ])
-
+print(dfall[dfall$high==2, ])
 
 #qplot(factor(selfeat), data=allfeatsel, geom="bar", fill=factor(high))
 ggplot(dfall, aes(x=Var1, y=Freq, fill=factor(high))) + 
@@ -156,23 +155,23 @@ n=15
 colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
 # plot 1/4
 p1 = calcAUC_plot(perf_imgT2$obs, perf_imgT2$C, 
-                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+                           xptext=0.45, yptext=0.75, ltype=4, colors[2], atitle="")
 par(new=TRUE)
 p2 = calcAUC_plot(perf_allT2$obs, perf_allT2$C, 
-                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+                           xptext=0.55, yptext=0.65, ltype=3, colors[9], atitle="")
 par(new=TRUE)
 p3 = calcAUC_plot(perf_imgT1$obs, perf_imgT1$C,
-                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+                           xptext=0.65, yptext=0.55, ltype=2, colors[11], atitle="")
 par(new=TRUE)
 p4 = calcAUC_plot(perf_all$obs, perf_all$C,
-                           xptext=0.75, yptext=0.45 ,colors[14], atitle="ROCs leave-one-patient out test ")
+                           xptext=0.75, yptext=0.45, ltype=1, colors[14], atitle="ROCs leave-one-patient out test ")
 
 legend("bottomright", 
        legend = c(paste0("imgT2w"),
                   paste0("imgT2w+predT2w"),
                   paste0("imgT1w"),
                   paste0("imgT1+imgT2w+predT2w")),
-       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+       col = c(colors[2],colors[9],colors[11],colors[14]), lty=c(4,3,2,1), lwd = 3)
 
 
 # find significants: only imgT2 vs. allT2
@@ -190,7 +189,7 @@ Results by subpopulation of patients
 ============
 ```{r fig.width=12, fig.height=12, warning=FALSE}
 
-allfT2 = read_T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+allfT2 = read3Dtex_T2uniqcad_parti(id_cad_pts, uniq_cad, kfcvpartitionsetD, 10, 1)
 datasets = data.frame(rbind(allfT2[[2]], allfT2[[1]]), check.names = FALSE)
 datasetsinfo = data.frame(cbind(rbind(allfT2[[6]],allfT2[[5]]),
                                 BIRADS_T2wSI = datasets$find_t2_signal_int), check.names = FALSE) 
@@ -222,31 +221,37 @@ n=15
 colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
 # plot 1/4
 p1 = calcAUC_plot(massperf_imgT2$obs, massperf_imgT2$C, 
-                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+                           xptext=0.45, yptext=0.75, ltype=4, colors[2], atitle="")
 par(new=TRUE)
 p2 = calcAUC_plot(massperf_allT2$obs, massperf_allT2$C, 
-                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+                           xptext=0.55, yptext=0.65, ltype=3, colors[9], atitle="")
 par(new=TRUE)
 p3 = calcAUC_plot(massperf_imgT1$obs, massperf_imgT1$C,
-                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+                           xptext=0.65, yptext=0.55, ltype=2, colors[11], atitle="")
 par(new=TRUE)
 p4 = calcAUC_plot(massperf_all$obs, massperf_all$C,
-                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for mass ROCs leave-one-patient out test ")
+                           xptext=0.75, yptext=0.45, ltype=1, colors[14], atitle="for mass ROCs 10f cross-validation")
 
 legend("bottomright", 
        legend = c(paste0("imgT2w"),
                   paste0("imgT2w+predT2w"),
                   paste0("imgT1w"),
                   paste0("imgT1+imgT2w+predT2w")),
-       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+       col = c(colors[2],colors[9],colors[11],colors[14]), lty=c(4,3,2,1), lwd = 3)
 
 # find significants: only imgT2 vs. allT2
 roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
 # find significants: mass imgT1 vs all
-roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
 # find significants: mass allT2 vs all
 roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
 
+# look at pAUC
+plot(x = roc(response = massperf_all$obs, predictor = massperf_all$C, 
+         ci=TRUE, print.auc=TRUE, 
+         partial.auc = c(100, 90), partial.auc.focus="se",
+         print.auc.pattern="Corrected pAUC (100-90%% SE):\n%.1f%%", print.auc.col=colors[14],
+         col=colors[14], lty=4, legacy.axes=TRUE, main="") )
 
 
 # Get datasets based on ids
@@ -270,36 +275,85 @@ n=15
 colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
 # plot 1/4
 p1 = calcAUC_plot(nonmassperf_imgT2$obs, nonmassperf_imgT2$C, 
-                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+                           xptext=0.45, yptext=0.75, ltype=4, colors[2], atitle="")
 par(new=TRUE)
 p2 = calcAUC_plot(nonmassperf_allT2$obs, nonmassperf_allT2$C, 
-                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+                           xptext=0.55, yptext=0.65, ltype=3, colors[9], atitle="")
 par(new=TRUE)
 p3 = calcAUC_plot(nonmassperf_imgT1$obs, nonmassperf_imgT1$C,
-                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+                           xptext=0.65, yptext=0.55, ltype=2, colors[11], atitle="")
 par(new=TRUE)
 p4 = calcAUC_plot(nonmassperf_all$obs, nonmassperf_all$C,
-                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for nonmass ROCs leave-one-patient out test ")
+                           xptext=0.75, yptext=0.45, ltype=1, colors[14], atitle="for nonmass ROCs 10f cross-validation")
 
 legend("bottomright", 
        legend = c(paste0("imgT2w"),
                   paste0("imgT2w+predT2w"),
                   paste0("imgT1w"),
                   paste0("imgT1+imgT2w+predT2w")),
-       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+       col = c(colors[2],colors[9],colors[11],colors[14]), lty=c(4,3,2,1), lwd = 3)
 
 # find significants: only imgT2 vs. allT2
 roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
 # find significants: nonmass imgT1 vs all
-roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
+roc.test(p3$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE, n.boot=5000)
 # find significants: nonmass allT2 vs all
 roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), boot.stratified=TRUE)
 
 
+plot.roc(massperf_all$obs, massperf_all$C, # data  
+         legacy.axes=TRUE, percent=FALSE, # show all values in percent  
+         partial.auc=c(1, 0.9), partial.auc.correct=TRUE, # define a partial AUC (pAUC)
+         print.auc=TRUE, #display pAUC value on the plot with following options:
+         print.auc.pattern="pAUC (1-0.9 SP):\n%.2f%%", print.auc.col=colors[14],
+         col=colors[14],
+         auc.polygon=TRUE, auc.polygon.col=colors[14], # show pAUC as a polygon
+         max.auc.polygon=TRUE, max.auc.polygon.col="#FF00CC22", # also show the 100% polygon
+         main="Mass vs. nonmass Partial AUC (pAUC) at high specificity ")
+plot.roc(nonmassperf_all$obs, nonmassperf_all$C, # data
+         add=TRUE, type="n", # add to plot, but don't re-add  
+         legacy.axes=TRUE, percent=FALSE, # show all values in percent  
+         partial.auc=c(1, 0.9), partial.auc.correct=TRUE, # define a partial AUC (pAUC)
+         print.auc=TRUE, #display pAUC value on the plot with following options:
+         print.auc.pattern="pAUC (1-0.9 SP):\n%.2f%%", print.auc.col=colors[12],
+         print.auc.y=0.3, # do not print auc over the previous one  
+         col=colors[12],
+         auc.polygon=TRUE, auc.polygon.col=colors[12], # show pAUC as a polygon
+         max.auc.polygon=TRUE, max.auc.polygon.col="#6600FF22", # also show the 100% polygon
+         main=" ")
+
+## for CI across all points
+# plot(x = roc(response = massperf_all$obs, predictor = massperf_all$C, 
+#              percent = TRUE, 
+#              ci = TRUE, of = "se", sp = seq(0, 100,5)), ci.type="shape")
+# 
+
+plot.roc(massperf_all$obs, massperf_all$C, # data  
+         legacy.axes=TRUE, percent=FALSE, # show all values in percent  
+         partial.auc=c(1, 0.9), partial.auc.correct=TRUE, # define a partial AUC (pAUC)
+         partial.auc.focus="se",
+         print.auc=TRUE, #display pAUC value on the plot with following options:
+         print.auc.pattern="pAUC (1-0.9 SE):\n%.2f%%", print.auc.col=colors[14],
+         col=colors[14],
+         auc.polygon=TRUE, auc.polygon.col=colors[14], # show pAUC as a polygon
+         max.auc.polygon=TRUE, max.auc.polygon.col="#FF00CC22", # also show the 100% polygon
+         main="Mass vs. nonmass Partial AUC (pAUC) at high sensitivity ")
+plot.roc(nonmassperf_all$obs, nonmassperf_all$C, # data
+         add=TRUE, type="l", # add to plot, but don't re-add  
+         legacy.axes=TRUE, percent=FALSE, # show all values in percent  
+         partial.auc=c(1, 0.9), partial.auc.correct=TRUE, # define a partial AUC (pAUC)
+         partial.auc.focus="se",
+         print.auc=TRUE, #display pAUC value on the plot with following options:
+         print.auc.pattern="pAUC (1-0.9 SE):\n%.2f%%", print.auc.col=colors[12],
+         print.auc.y=0.3, # do not print auc over the previous one  
+         col=colors[12],
+         auc.polygon=TRUE, auc.polygon.col=colors[12], # show pAUC as a polygon
+         max.auc.polygon=TRUE, max.auc.polygon.col="#6600FF22", # also show the 100% polygon
+         main=" ")
+
 
 # subset by Hyperintense = 106, Hypointense or not seen = 161,  Slightly hyperintense = 68, ntotal = 335
 # None = 355
-
 ##################
 summary(factor(datasetsinfo$BIRADS_T2wSI))
 T2wids=subset(datasetsinfo, BIRADS_T2wSI=="Hyperintense" | 
@@ -322,30 +376,29 @@ for(t2si in T2wids$lesion_id){
   }
 }
 
-
 ## plot ROCs each pass individually in l-o-p heldout test cases
 par(mfrow=c(1,1))
 n=15
 colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
 # plot 1/4
 p1 = calcAUC_plot(T2wsiperf_imgT2$obs, T2wsiperf_imgT2$C, 
-                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+                           xptext=0.45, yptext=0.75 , ltype=4, colors[2], atitle="")
 par(new=TRUE)
 p2 = calcAUC_plot(T2wsiperf_allT2$obs, T2wsiperf_allT2$C, 
-                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+                           xptext=0.55, yptext=0.65 , ltype=3, colors[9], atitle="")
 par(new=TRUE)
 p3 = calcAUC_plot(T2wsiperf_imgT1$obs, T2wsiperf_imgT1$C,
-                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+                           xptext=0.65, yptext=0.55 , ltype=2, colors[11], atitle="")
 par(new=TRUE)
 p4 = calcAUC_plot(T2wsiperf_all$obs, T2wsiperf_all$C,
-                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for BIRADS T2wSI ROCs leave-one-patient out test ")
+                           xptext=0.75, yptext=0.45 , ltype=1, colors[14], atitle="for BIRADS T2wSI ROCs 10f cross-validation")
 
 legend("bottomright", 
        legend = c(paste0("imgT2w"),
                   paste0("imgT2w+predT2w"),
                   paste0("imgT1w"),
                   paste0("imgT1+imgT2w+predT2w")),
-       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+       col = c(colors[2],colors[9],colors[11],colors[14]), lty=c(4,3,2,1), lwd = 3)
 
 # find significants: only imgT2 vs. allT2
 roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
@@ -376,23 +429,23 @@ n=15
 colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
 # plot 1/4
 p1 = calcAUC_plot(NoneT2wsiperf_imgT2$obs, NoneT2wsiperf_imgT2$C, 
-                           xptext=0.45, yptext=0.75 ,colors[2], atitle="")
+                           xptext=0.45, yptext=0.75 , ltype=4, colors[2], atitle="")
 par(new=TRUE)
 p2 = calcAUC_plot(NoneT2wsiperf_allT2$obs, NoneT2wsiperf_allT2$C, 
-                           xptext=0.55, yptext=0.65 ,colors[9], atitle="")
+                           xptext=0.55, yptext=0.65 , ltype=3, colors[9], atitle="")
 par(new=TRUE)
 p3 = calcAUC_plot(NoneT2wsiperf_imgT1$obs, NoneT2wsiperf_imgT1$C,
-                           xptext=0.65, yptext=0.55 ,colors[11], atitle="")
+                           xptext=0.65, yptext=0.55 , ltype=2, colors[11], atitle="")
 par(new=TRUE)
 p4 = calcAUC_plot(NoneT2wsiperf_all$obs, NoneT2wsiperf_all$C,
-                           xptext=0.75, yptext=0.45 ,colors[14], atitle="for None BIRADS T2wSI ROCs leave-one-patient out test ")
+                           xptext=0.75, yptext=0.45 , ltype=1, colors[14], atitle="for None BIRADS T2wSI ROCs 10f cross-validation ")
 
 legend("bottomright", 
        legend = c(paste0("imgT2w"),
                   paste0("imgT2w+predT2w"),
                   paste0("imgT1w"),
                   paste0("imgT1+imgT2w+predT2w")),
-       col = c(colors[2],colors[9],colors[11],colors[14]), lwd = 2)
+       col = c(colors[2],colors[9],colors[11],colors[14]), lty=c(4,3,2,1), lwd = 3)
 
 # find significants: only imgT2 vs. allT2
 roc.test(p1$ROC, p2$ROC, method=c("bootstrap"), alternative = c("less"), boot.stratified=TRUE)
@@ -404,3 +457,138 @@ roc.test(p2$ROC, p4$ROC, method=c("bootstrap"), alternative = c("two.sided"), bo
 
 ```
 
+
+Aided-interpretaion of CAD results by each fold
+==================
+```{r fig.width=12, fig.height=12, warning=FALSE}
+k=8
+loppath = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue"
+setwd(loppath)
+load(paste0("Outputs/weigNH_addeddiagvalue_3Dtexbagg_cv",k,".RData"))
+source("functions.R")
+source('Z:/Cristina/MassNonmass/Section 2 - Experiments/Qfunc_T2w_NodeHarvest/source/source_nodeHarvest.r')
+source('Z:/Cristina/MassNonmass/Section 2 - Experiments/Qfunc_T2w_NodeHarvest/source/source_plotNH.R', encoding = 'UTF-8')
+
+print(treedata_all$forest$varnames)
+
+## post training... to find out about a NH prediction in the test set
+library(nodeHarvest)
+kid = 58
+print(perfcv_imgT1[(kid-1):(kid+1),])
+print(perfcv_all[(kid-1):(kid+1),])
+
+print(T1T2testinfo[kid,c(1,3,6,8,12,21:26)])
+cat(T1T2testinfo[kid,19])
+cat(T1T2testinfo[kid,20])
+# predicted T2w SI
+print(T1T2test$T2wSI_predicted[kid])
+# assigned T2w SI
+print(T2test[kid,])
+
+# predict with only T1
+fdict = feature_dictionary(imgT1features)
+
+plotNH(imgT1features, fdict$fnnames, treedata_imgT1$forest,
+       XTEST=T1test[kid,c(names(imgT1features[2:ncol(imgT1features)]))], 
+       highlight=1, labels="", cexfaclab=1)
+
+predict(treedata_imgT1$forest, 
+        newdata=T1test[kid,c(names(imgT1features[2:ncol(imgT1features)]))],  
+        explain=1, maxshow = length(treedata_imgT1$forest$nodes))
+
+# predict with all
+fdict = feature_dictionary(allfeatures)
+plotNH(allfeatures, fdict$fnnames, treedata_all$forest,
+       XTEST=T1T2test[kid,c(names(allfeatures[2:ncol(allfeatures)]))], 
+       highlight=1, labels="", cexfaclab=1)
+
+predict(treedata_all$forest, 
+        newdata=T1T2test[kid,c(names(allfeatures[2:ncol(allfeatures)]))],  
+        explain=1, maxshow = length(treedata_all$forest$nodes))
+
+
+
+## post training... to find out about a NH prediction in the test set
+library(nodeHarvest)
+kid = 40
+print(perfcv_imgT1[(kid-1):(kid+1),])
+print(perfcv_all[(kid-1):(kid+1),])
+
+print(T1T2testinfo[kid,c(1,3,6,8,12,21:26)])
+cat(T1T2testinfo[kid,19])
+cat(T1T2testinfo[kid,20])
+# predicted T2w SI
+print(T1T2test$T2wSI_predicted[kid])
+# assigned T2w SI
+print(T2test[kid,])
+
+# predict with only T1
+fdict = feature_dictionary(imgT1features)
+
+plotNH(imgT1features, fdict$fnnames, treedata_imgT1$forest,
+       XTEST=T1test[kid,c(names(imgT1features[2:ncol(imgT1features)]))], 
+       highlight=1, labels="", cexfaclab=1)
+
+predict(treedata_imgT1$forest, 
+        newdata=T1test[kid,c(names(imgT1features[2:ncol(imgT1features)]))],  
+        explain=1, maxshow = length(treedata_imgT1$forest$nodes))
+
+# predict with all
+fdict = feature_dictionary(allfeatures)
+plotNH(allfeatures, fdict$fnnames, treedata_all$forest,
+       XTEST=T1T2test[kid,c(names(allfeatures[2:ncol(allfeatures)]))], 
+       highlight=1, labels="", cexfaclab=1)
+
+predict(treedata_all$forest, 
+        newdata=T1T2test[kid,c(names(allfeatures[2:ncol(allfeatures)]))],  
+        explain=1, maxshow = length(treedata_all$forest$nodes))
+
+k=3
+loppath = "C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue"
+setwd(loppath)
+load(paste0("Outputs/weigNH_addeddiagvalue_3Dtexbagg_cv",k,".RData"))
+source("functions.R")
+source('Z:/Cristina/MassNonmass/Section 2 - Experiments/Qfunc_T2w_NodeHarvest/source/source_nodeHarvest.r')
+source('Z:/Cristina/MassNonmass/Section 2 - Experiments/Qfunc_T2w_NodeHarvest/source/source_plotNH.R', encoding = 'UTF-8')
+
+print(treedata_all$forest$varnames)
+print(perfcv_all$pred != perfcv_imgT1$pred & perfcv_all$obs=="NC" & perfcv_all$pred=="NC")
+print(T1T2testinfo$lesion_label)
+
+## post training... to find out about a NH prediction in the test set
+library(nodeHarvest)
+kid =55
+print(perfcv_imgT1[(kid-1):(kid+1),])
+print(perfcv_all[(kid-1):(kid+1),])
+
+print(T1T2testinfo[kid,c(1,3,6,8,12,21:26)])
+cat(T1T2testinfo[kid,19])
+cat(T1T2testinfo[kid,20])
+# predicted T2w SI
+print(T1T2test$T2wSI_predicted[kid])
+# assigned T2w SI
+print(T2test[kid,])
+
+# predict with only T1
+fdict = feature_dictionary(imgT1features)
+
+plotNH(imgT1features, fdict$fnnames, treedata_imgT1$forest,
+       XTEST=T1test[kid,c(names(imgT1features[2:ncol(imgT1features)]))], 
+       highlight=1, labels="", cexfaclab=1)
+
+predict(treedata_imgT1$forest, 
+        newdata=T1test[kid,c(names(imgT1features[2:ncol(imgT1features)]))],  
+        explain=1, maxshow = length(treedata_imgT1$forest$nodes))
+
+# predict with all
+fdict = feature_dictionary(allfeatures)
+plotNH(allfeatures, fdict$fnnames, treedata_all$forest,
+       XTEST=T1T2test[kid,c(names(allfeatures[2:ncol(allfeatures)]))], 
+       highlight=1, labels="", cexfaclab=1)
+
+predict(treedata_all$forest, 
+        newdata=T1T2test[kid,c(names(allfeatures[2:ncol(allfeatures)]))],  
+        explain=1, maxshow = length(treedata_all$forest$nodes))
+
+
+```

@@ -1,0 +1,490 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+
+Predictor model of BIRADS T2w SI:
+=============================
+- This code creates a classifier based predictor of BIRADS T2w SI and add them to the pool of 55 T2w features for a total of 57 T2w featues
+
+```{r set-options, echo=FALSE, cache=FALSE}
+options(width =95)
+
+library(caret)
+require(ggplot2)
+library("RSQLite")
+library(klaR)
+library(adabag)
+library(pROC)
+
+setwd("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS")
+source('C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/functions.R')
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/Inputs/allpartitionsetD")
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/T2_featurespred_BIRADS_SI.Rdata")
+load("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/classifierT2wSI_boosting.RData")
+# to locate selected features by boruta by cascade pass: zscore_selected
+# to locate selected features by RRF by cascade pass: allBIRADSfeatures
+
+```
+
+```{r fig.width=12, fig.height=12, warning=FALSE}
+# read datasets
+npatients = length(uniq_cad)
+allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, 1)
+    
+## formant
+allfeatures = rbind(allf[[1]], allf[[2]])
+alllesioninfo = rbind(allf[[5]], allf[[6]])
+
+### print number of total lesions 
+# before was ##   C / NC = 140 / 132
+print(summary(as.factor(allfeatures$orig_label)))
+
+#######################
+# format datasets with find_t2_signal_int as response variable
+allfeaturest2_signal = cbind(allfeatures["find_t2_signal_int"], allfeatures[,2:ncol(allfeatures)])
+allfeaturest2_signal = allfeaturest2_signal[-c(199,ncol(allfeatures))]
+
+allfeaturest2_signal$find_t2_signal_int = as.factor(allfeaturest2_signal$find_t2_signal_int)
+summary(allfeaturest2_signal$find_t2_signal_int)
+
+#######################
+# Subset previuosly selected features
+# for Boruta
+borutasel = unique(zscore_selected[,2:3])
+borutasel = borutasel[-grep("shadow",borutasel$selfeat),]
+rrfsel = unique(allBIRADSfeatures[,c(1,3)])
+
+```
+
+
+
+Building final boosting tree classifier of Categorial predictor of RSI on T2w Levels: Hyperintense, Slightly hyperintense, Hypointensity, NO T2w SI
+=======
+
+```{r fig.width=12, fig.height=12, warning=FALSE}
+# collect parameters for bestuned boosting tree classifier of Categorial predictors
+print(bestune_HyperNone)
+print(bestune_IntenseorNot)
+print(bestune_HyperorSlight)
+
+ntrees_HyperNone = bestune_HyperNone$y
+maxD_HyperNone = bestune_HyperNone$x
+alpha_HyperNone = bestune_HyperNone$z
+loperf_HyperNone = c()
+
+ntrees_IntenseorNot = bestune_IntenseorNot$y
+maxD_IntenseorNot = bestune_IntenseorNot$x
+alpha_IntenseorNot = bestune_IntenseorNot$z
+loperf_IntenseorNot = c()
+
+ntrees_HyperorSlight = bestune_HyperorSlight$y
+maxD_HyperorSlight = bestune_HyperorSlight$x
+alpha_HyperorSlight = bestune_HyperorSlight$z
+loperf_HyperorSlight = c()
+
+npatients = length(uniq_cad)
+dfinfoT2wSI_lop = data.frame()
+perfT2wSI_lop = data.frame()
+perf_cascadeall = data.frame()
+
+
+# perform leave-one-patient-out LMSIR prediction
+for(k in 1:npatients){
+  ## Create folds leave-one-patient-out
+  allf = read_T1T2uniqcad_parti(id_cad_pts, uniq_cad, allpartitionsetD, npatients, k)
+    
+  ## formant
+  Trainset = allf[[1]]; Trainsetinfo = allf[[5]]
+  Testset = allf[[2]]; Testsetinfo = allf[[6]]
+  dfinfo = cbind(Testsetinfo[,c(1,3,6:7,12,24:26)], Testset$find_t2_signal_int)
+  print(dfinfo)
+  Testset$id = Testsetinfo$lesion_id
+  
+  ##################################### pass 1 # option = feat_HyperNone
+  Trainset_HyperNone = Trainset[,-c(1,ncol(Trainset))]
+  Trainset_HyperNone$find_t2_signal_int = factor(ifelse(Trainset_HyperNone$find_t2_signal_int=="None","None","Intense"))
+  
+  # train tree
+  treedata_HyperNone <- boosting(find_t2_signal_int ~ .,  data = Trainset_HyperNone,  
+                       mfinal = ntrees_HyperNone, coeflearn = "Freund",
+                       control = rpart.control(maxdepth = maxD_HyperNone,  minsplit = 0, cp = alpha_HyperNone))
+  accuHyperNone = sum(treedata_HyperNone$class == Trainset_HyperNone$find_t2_signal_int)/ length(Trainset_HyperNone$find_t2_signal_int)
+  print(accuHyperNone)
+  loperf_HyperNone = c(loperf_HyperNone, accuHyperNone)                      
+
+  #####################################  pass 2 # option = feat_IntenseorNot 
+  Trainset_IntenseorNot = Trainset[Trainset$find_t2_signal_int != "None", -c(1,ncol(Trainset))]
+  Trainset_IntenseorNot$find_t2_signal_int = factor(ifelse(Trainset_IntenseorNot$find_t2_signal_int=="Hypointense or not seen",
+                                                           "Hypointense or not seen","Intense"))
+  
+  # train tree
+  treedata_IntenseorNot <- boosting(find_t2_signal_int ~ .,  data = Trainset_IntenseorNot,  
+                       mfinal = ntrees_IntenseorNot, coeflearn = "Freund",
+                       control = rpart.control(maxdepth = maxD_IntenseorNot,  minsplit = 0, cp = alpha_IntenseorNot))
+  accuIntenseorNot = sum(treedata_IntenseorNot$class == Trainset_IntenseorNot$find_t2_signal_int)/ length(Trainset_IntenseorNot$find_t2_signal_int)
+  print(accuIntenseorNot)
+  loperf_IntenseorNot = c(loperf_IntenseorNot, accuIntenseorNot)  
+
+  ##################################### pass 3 # option = feat_HyperorSlight 
+  Trainset_HyperorSlight = Trainset[Trainset$find_t2_signal_int != "None", -c(1,ncol(Trainset))]
+  Trainset_HyperorSlight = Trainset_HyperorSlight[Trainset_HyperorSlight$find_t2_signal_int != "Hypointense or not seen", ]
+  Trainset_HyperorSlight$find_t2_signal_int = as.factor(Trainset_HyperorSlight$find_t2_signal_int)
+  summary(Trainset_HyperorSlight$find_t2_signal_int)
+  
+  # train tree
+  treedata_HyperorSlight <- boosting(find_t2_signal_int ~ .,  data = Trainset_HyperorSlight,  
+                       mfinal = ntrees_HyperorSlight, coeflearn = "Freund",
+                       control = rpart.control(maxdepth = maxD_HyperorSlight,  minsplit = 0, cp = alpha_HyperorSlight))
+  accuHyperorSlight = sum(treedata_HyperorSlight$class == Trainset_HyperorSlight$find_t2_signal_int)/ length(Trainset_HyperorSlight$find_t2_signal_int)
+  print(accuHyperorSlight)
+  loperf_HyperorSlight = c(loperf_HyperorSlight, accuHyperorSlight)  
+  
+  ##################################### 
+  # predict
+  perf_cascade = data.frame()
+  perfT2wSI = data.frame()
+  Testset_labels1 = factor(ifelse(Testset$find_t2_signal_int=="None","None","Intense"))
+  # pass 1
+  testpred = predict.boosting(treedata_HyperNone, newdata = Testset) 
+  perf_pass1 = data.frame(id=Testset$id,
+                          P=testpred$prob[,1], N=testpred$prob[,2],
+                          obs=Testset$find_t2_signal_int,
+                          pred=testpred$class,
+                          cascade_obs=Testset_labels1,
+                          pass="pass1")
+  
+  # collect those not passing
+  notpassing = perf_pass1[perf_pass1$pred == "None",]
+  perf_cascade = rbind(perf_cascade, notpassing)
+  perfT2wSI = rbind(perfT2wSI, notpassing[,-c(6)])
+  
+  # select those passing
+  Testset_pass1 = Testset[perf_pass1$pred == "Intense",]
+  Testset_pass1noNone = data.frame()
+  Testset_pass2noHypo = data.frame()
+  Testset_pass2 = data.frame()
+
+  # pass 2
+  if(nrow(Testset_pass1) > 0){
+    ## if observation is None, stop the cascade pass
+    Testset_pass1noNone = data.frame()
+    for(i in 1:nrow(Testset_pass1)){
+      if(Testset_pass1[i,"find_t2_signal_int"]=="None"){
+        perf_cascade = rbind(perf_cascade, perf_pass1[i,])
+      }
+      else{
+        Testset_pass1noNone = rbind(Testset_pass1noNone, Testset_pass1[i,] )
+      }
+    }
+  }
+  if(nrow(Testset_pass1noNone) > 0){
+    Testset_labels2 = factor(ifelse(Testset_pass1noNone$find_t2_signal_int=="Hypointense or not seen","Hypointense or not seen","Intense"))
+    
+    testpred = predict.boosting(treedata_IntenseorNot, newdata = Testset_pass1noNone) 
+    perf_pass2 = data.frame(id=Testset_pass1noNone$id,
+                            P=testpred$prob[,1], N=testpred$prob[,2],
+                            obs=Testset_pass1noNone$find_t2_signal_int,
+                            pred=testpred$class,
+                            cascade_obs=Testset_labels2,
+                            pass="pass2")
+    
+
+    # collect those not passing
+    notpassing = perf_pass2[perf_pass2$pred == "Hypointense or not seen",]
+    perf_cascade = rbind(perf_cascade, notpassing)
+    # select those passing (mutually exclusive from hipo)
+    Testset_pass2 = Testset_pass1noNone[perf_pass2$pred == "Intense",]
+    
+    ## if observation is None, stop the cascade pass
+    Testset_pass2noHypo = data.frame()
+    if(nrow(Testset_pass2) > 0){
+      for(i in 1:nrow(Testset_pass2)){
+        if(Testset_pass2[i,"find_t2_signal_int"]=="Hypointense or not seen"){
+          perf_cascade = rbind(perf_cascade, perf_pass2[i,])
+        }
+        else{
+          Testset_pass2noHypo = rbind(Testset_pass2noHypo, Testset_pass2[i,] )
+        }
+      }
+    }
+  }
+  # pass 3
+  if(nrow(Testset_pass2noHypo) > 0){
+    testpred = predict.boosting(treedata_HyperorSlight, newdata = Testset_pass2noHypo) 
+    perf_pass3 = data.frame(id=Testset_pass2noHypo$id,
+                            P=testpred$prob[,1], N=testpred$prob[,2],
+                            obs=Testset_pass2noHypo$find_t2_signal_int,
+                            pred=testpred$class,
+                            cascade_obs=Testset_pass2noHypo$find_t2_signal_int,
+                            pass="pass3")
+    
+    print(perf_pass2)
+    cat ("Press [enter] to continue")
+    line <- readline()
+    
+    # collect final
+    perf_cascade = rbind(perf_cascade, perf_pass3)
+  }
+  
+  print(perf_cascade)
+  perf_cascadeall = rbind(perf_cascadeall, perf_cascade)
+  
+  #######################
+  # pass 2 # overall
+  if(nrow(Testset_pass1) > 0){
+    testpred = predict.boosting(treedata_IntenseorNot, newdata = Testset_pass1) 
+    perf_pass2 = data.frame(id=Testset_pass1$id,
+                            P=testpred$prob[,1], N=testpred$prob[,2],
+                            obs=Testset_pass1$find_t2_signal_int,
+                            pred=testpred$class,
+                            pass="pass2")
+    
+    # collect those not passing
+    notpassing = perf_pass2[perf_pass2$pred == "Hypointense or not seen",]
+    perfT2wSI = rbind(perfT2wSI, notpassing)
+    # select those passing
+    Testset_pass2 = Testset_pass1[perf_pass2$pred == "Intense",]
+  }
+  # pass 3
+  if(nrow(Testset_pass2) > 0){
+    testpred = predict.boosting(treedata_HyperorSlight, newdata = Testset_pass2) 
+    perf_pass3 = data.frame(id=Testset_pass2$id,
+                            P=testpred$prob[,1], N=testpred$prob[,2],
+                            obs=Testset_pass2$find_t2_signal_int,
+                            pred=testpred$class,
+                            pass="pass3")
+    
+    # collect final
+    perfT2wSI = rbind(perfT2wSI, perf_pass3)
+  }
+  
+  ## overall not interrupted thorugh cascade
+  print(perfT2wSI)
+  perfT2wSI_lop = rbind(perfT2wSI_lop, perfT2wSI)
+  dfinfoT2wSI_lop = rbind(dfinfoT2wSI_lop, dfinfo)
+  
+  ## pause  
+  #cat ("Press [enter] to continue")
+  #line <- readline()
+  save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/final_classifierT2wSI_boosting.RData")
+
+  
+}
+  
+save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/final_classifierT2wSI_boosting.RData")
+
+  
+```
+
+
+
+
+Plot all lop accuracy resamples
+=======
+```{r fig.width=12, fig.height=12, warning=FALSE}
+print(summary(loperf_HyperNone))
+print(summary(loperf_IntenseorNot))
+print(summary(loperf_HyperorSlight))
+
+# plot
+lop_accuracies = data.frame(Accuracy=loperf_HyperNone, type="Hyper.v.s.None")
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=loperf_IntenseorNot, type="Intense.v.s.None"))
+lop_accuracies = rbind(lop_accuracies, data.frame(Accuracy=loperf_HyperorSlight, type="Hyper.v.s.SlightHyper"))
+
+p <- ggplot(lop_accuracies, aes(type, Accuracy))
+p + geom_boxplot() + geom_jitter(width = 0.2)
+
+
+```
+
+Plot final ROC
+=======
+```{r fig.width=12, fig.height=12, warning=FALSE}
+
+print(confusionMatrix(factor(perf_cascadeall$pred), factor(perf_cascadeall$cascade_obs)))
+
+# perf_cascadeall, based on treedata
+#  pass1: P(1==Intense    0==None) 
+#  pass2: P(1==Hypointense or not seen,   0==Intense)
+#  pass3: P(1==Hyperintense,   0==Slightly hyperintense)
+
+perfpass1 = subset(perf_cascadeall, pass=="pass1")
+perfpass1$cascade_obs = factor(ifelse(perfpass1$cascade_obs=="Intense",1,0))
+
+perfpass2 = subset(perf_cascadeall, pass=="pass2")
+perfpass2$cascade_obs = factor(ifelse(perfpass2$cascade_obs=="Hypointense or not seen",1,0))
+
+perfpass3 = subset(perf_cascadeall, pass=="pass3")
+perfpass3$cascade_obs = factor(ifelse(perfpass3$cascade_obs=="Hyperintense",1,0))
+
+
+## plot ROCs each pass individually 
+par(mfrow=c(1,1))
+n=15
+colors = rainbow(n, s = 1, v = 1, start = 0, end = max(1, n - 1)/n, alpha = 1)
+# plot 1/4
+p1 = calcAUC_plot(perfpass1$cascade_obs, perfpass1$P, 
+                           xptext=0.45, yptext=0.65 ,colors[1], atitle="")
+par(new=TRUE)
+p2 = calcAUC_plot(perfpass2$cascade_obs, perfpass2$P, 
+                           xptext=0.55, yptext=0.55 ,colors[8], atitle="")
+par(new=TRUE)
+p3 = calcAUC_plot(perfpass3$cascade_obs, perfpass3$P,
+                           xptext=0.65, yptext=0.45 ,colors[12], atitle="ROCs leave-one-out cascading 3 passes ")
+
+legend("bottomright", 
+       legend = c(paste0("Hyper.v.s.None"), paste0("Intense.v.s.Notseen"),paste0("Hyper.v.s.slightlyHyper")),
+       col = c(colors[1],colors[8],colors[12]), lwd = 2)
+
+
+# append
+overallperf = rbind(perfpass1, perfpass2, perfpass3)
+
+library(pROC)
+ROC_overall <- plot.roc(overallperf$cascade_obs, overallperf$P, col = "#000093", lty = 1, legacy.axes=TRUE,
+                        main = "overall ROC for boosting tree predictor of BIRADS T2sI")
+print(ROC_overall$auc)
+
+
+
+##########################
+# confusion matrix
+##########################
+# need to remove repeates
+listids = c()
+revperfT2wSI_lop = data.frame()
+for(i in 1:nrow(perfT2wSI_lop)){
+  if( !perfT2wSI_lop$id[i] %in% listids ){
+    listids = c(listids, perfT2wSI_lop$id[i])
+    revperfT2wSI_lop = rbind(revperfT2wSI_lop, perfT2wSI_lop[i,])
+  }
+}
+
+print(confusionMatrix(factor(revperfT2wSI_lop$pred), factor(revperfT2wSI_lop$obs)))
+
+# print total numbers
+print(nrow(revperfT2wSI_lop))
+
+##########################
+# plot by ground Truth
+# pass1
+dfres_pass1None = subset(revperfT2wSI_lop, obs == "None")[,4:5]
+dfres_pass1None$category = "Hyper.v.s.None"
+dfres_pass1None$classification = ifelse(as.character(dfres_pass1None$pred) == dfres_pass1None$obs,"correct","incorrect")
+dfres_pass1None$classtype = "cascade"
+
+# pass2
+dfres_pass2Hypo = subset(revperfT2wSI_lop, obs == "Hypointense or not seen")[,4:5]
+dfres_pass2Hypo$category = "Hypointense or not seen"
+dfres_pass2Hypo$classification = ifelse(as.character(dfres_pass2Hypo$pred) == dfres_pass2Hypo$obs,"correct","incorrect")
+dfres_pass2Hypo$classtype = "cascade"
+
+# pass3
+dfres_pass3Hyper = subset(revperfT2wSI_lop, obs == "Hyperintense")[,4:5]
+dfres_pass3Hyper$category = "Hyperintense"
+dfres_pass3Hyper$classification = ifelse(as.character(dfres_pass3Hyper$pred) == dfres_pass3Hyper$obs,"correct","incorrect")
+dfres_pass3Hyper$classtype = "cascade"
+
+dfres_pass3SHyper  = subset(revperfT2wSI_lop, obs == "Slightly hyperintense")[,4:5]
+dfres_pass3SHyper$category = "Slightly hyperintense"
+dfres_pass3SHyper$classification = ifelse(as.character(dfres_pass3SHyper$pred) == dfres_pass3SHyper$obs,"correct","incorrect")
+dfres_pass3SHyper$classtype = "cascade"
+
+dfres_cascade = rbind(dfres_pass1None, dfres_pass2Hypo, dfres_pass3Hyper, dfres_pass3SHyper)
+
+#### plot
+g = ggplot(dfres_cascade, aes(factor(category), fill=classification)) 
+g + geom_bar(aes(y = ..count..)) +
+    geom_text(aes(label = format(..count.., digits=2, drop0trailing=TRUE)), stat= "count") +
+  facet_grid(~classtype) 
+
+
+### order by correct/incorrect
+dfT2SI = data.frame()
+
+df1 = subset(revperfT2wSI_lop, obs=="Hyperintense")
+df1$obs_t2_si = ifelse(df1$obs=="Hyperintense",1,0)
+df1$pred_t2_si = ifelse(df1$pred=="None",0,1)
+df1$category = "Hyperintense"
+df1$classification = ifelse(df1$obs_t2_si == df1$pred_t2_si, "correct", "incorrect")
+df1$classtype = "boostingTrees"
+dfT2SI = rbind(dfT2SI, df1)
+
+df2 = subset(revperfT2wSI_lop, obs=="Slightly hyperintense")
+df2$obs_t2_si = ifelse(df2$obs == "Slightly hyperintense",1,0)
+df2$pred_t2_si = ifelse(df2$pred=="None",0,1)
+df2$category = "Slightly hyperintense"
+df2$classification = ifelse(df2$obs_t2_si == df2$pred_t2_si, "correct", "incorrect")
+df2$classtype = "boostingTrees"
+dfT2SI = rbind(dfT2SI, df2)
+
+df3 = subset(revperfT2wSI_lop, obs=="Hypointense or not seen")
+df3$obs_t2_si = ifelse(df3$obs == "Hypointense or not seen",1,0)
+df3$pred_t2_si = ifelse(df3$pred=="None",0,1)
+df3$category = "Hypointense or not seen"
+df3$classification = ifelse(df3$obs_t2_si == df3$pred_t2_si, "correct", "incorrect")
+df3$classtype = "boostingTrees"
+dfT2SI = rbind(dfT2SI, df3)
+
+### print accuracy in the overall T2w SI categories
+print(sum(dfT2SI$classification=="correct")/length(dfT2SI$classification))
+
+df4 = subset(revperfT2wSI_lop, obs=="None")
+df4$obs_t2_si = ifelse(df4$obs == "None",1,0)
+df4$pred_t2_si = 1
+df4$pred_t2_si[df4$pred=="Hypointense or not seen" | df4$pred=="None"] = 0
+df4$category = "No signal"
+df4$classification = ifelse(df4$obs_t2_si == df4$pred_t2_si, "correct", "incorrect")
+df4$classtype = "boostingTrees"
+dfT2SI = rbind(dfT2SI, df4)
+
+### print accuracy in the overall not reported T2w SI 
+print(sum(df4$classification=="correct")/length(df4$classification))
+
+
+#### plot
+datlabels = data.frame()
+
+dfl1 = data.frame(count = c(sum(df1$classification=="correct"), sum(df1$classification=="incorrect")))
+dfl1$ypos = c(dfl1$count[1]*0.5, dfl1$count[1]+dfl1$count[2]*0.5)
+dfl1$category = df1$category[1]
+dfl1$classification = c("correct", "incorrect")
+datlabels = rbind(datlabels, dfl1)
+
+dfl2 = data.frame(count = c(sum(df2$classification=="correct"), sum(df2$classification=="incorrect")))
+dfl2$ypos = c(dfl2$count[1]*0.5, dfl2$count[1]+dfl2$count[2]*0.5)
+dfl2$category = df2$category[1]
+dfl2$classification = c("correct", "incorrect")
+datlabels = rbind(datlabels, dfl2)
+
+dfl3 = data.frame(count = c(sum(df3$classification=="correct"), sum(df3$classification=="incorrect")))
+dfl3$ypos = c(dfl3$count[1]*0.5, dfl3$count[1]+dfl3$count[2]*0.5)
+dfl3$category = df3$category[1]
+dfl3$classification = c("correct", "incorrect")
+datlabels = rbind(datlabels, dfl3)
+
+dfl4 = data.frame(count = c(sum(df4$classification=="correct"), sum(df4$classification=="incorrect")))
+dfl4$ypos = c(dfl4$count[1]*0.5, dfl4$count[1]+dfl4$count[2]*0.5)
+dfl4$category = df4$category[1]
+dfl4$classification = c("correct", "incorrect")
+datlabels = rbind(datlabels, dfl4)
+
+g = ggplot(dfT2SI, aes(category, fill = classification))
+g + geom_bar() + facet_grid(. ~ classtype) + scale_fill_brewer(palette = "Set2") + 
+    stat_count(width = 0.5) + 
+  geom_text(data=datlabels, aes(label=count, y=ypos), angle = 0)
+ 
+
+```
+
+
+
+```{r}
+
+save.image("C:/Users/windows/Documents/repoCode-local/T2wR/lop_3Dtex_T2w_addedvalue/T2wBIRADS/Rdata/final_classifierT2wSI_boosting.RData")
+
+```
+
